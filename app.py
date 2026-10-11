@@ -1,0 +1,253 @@
+"""真实的世界 v0.3：感应加热淬火 + 结构校核 + PLC 虚拟调试（桌面程序）
+运行:  python3 app.py
+"""
+import sys, warnings, traceback
+warnings.filterwarnings("ignore")
+import matplotlib
+matplotlib.use("QtAgg")
+from PySide6 import QtCore, QtWidgets
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+
+from rw.induction import InductionQuenchSim, BottleNeckGeometry, find_power
+from rw import materials as M, viz
+
+MEDIA = [(k, M.QUENCHANTS[k]["name"]) for k in ("water_spray", "polymer_spray", "water_dip", "oil_dip", "air")]
+
+
+class Worker(QtCore.QObject):
+    progress = QtCore.Signal(int, str)
+    done = QtCore.Signal(object, object)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.p = params
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            p = dict(self.p)
+            geom = BottleNeckGeometry(**p.pop("geom"))
+            target = p.pop("target")
+            if target is not None:
+                self.progress.emit(2, f"自动找功率：让外表面加热到 {target:.0f}°C …")
+                p["power_kw"] = find_power(target, geom=geom, freq=p["freq"], t_heat=p["t_heat"],
+                                           mur_cold=p["mur_cold"])
+            self.progress.emit(10, f"计算中：{p['power_kw']:.2f} kW …")
+            sim = InductionQuenchSim(geom=geom, **p)
+            res = sim.run(progress=lambda x: self.progress.emit(10 + int(88 * x), "加热 → 淬火 …"))
+            self.done.emit(sim, res)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+
+class Canvas(FigureCanvasQTAgg):
+    def __init__(self):
+        self.fig = Figure(figsize=(6, 6))
+        super().__init__(self.fig)
+
+
+class InductionPage(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        lay = QtWidgets.QHBoxLayout(self)
+
+        # ---------------- 左侧参数
+        left = QtWidgets.QVBoxLayout()
+        gw = QtWidgets.QGroupBox("工件 / 线圈 (mm)")
+        fg = QtWidgets.QFormLayout(gw)
+        self.e = {}
+        for key, lab, val, lo, hi in [
+            ("neck_od", "瓶口外径", 22, 5, 200), ("wall", "壁厚", 3, 0.5, 30), ("neck_len", "瓶颈长", 50, 10, 300),
+            ("zone", "淬火区长", 20, 2, 100), ("coil_id", "线圈内径", 30, 6, 300), ("coil_h", "线圈高度", 25, 2, 200)]:
+            sp = QtWidgets.QDoubleSpinBox(); sp.setRange(lo, hi); sp.setValue(val); sp.setDecimals(1)
+            fg.addRow(lab, sp); self.e[key] = sp
+        left.addWidget(gw)
+
+        gh = QtWidgets.QGroupBox("加热")
+        fh = QtWidgets.QFormLayout(gh)
+        self.freq = QtWidgets.QComboBox(); self.freq.setEditable(True)
+        self.freq.addItems(["5", "10", "20", "30", "50", "100", "200"]); self.freq.setCurrentText("20")
+        fh.addRow("频率 (kHz)", self.freq)
+        self.mode = QtWidgets.QComboBox(); self.mode.addItems(["给定目标温度（自动调功率）", "给定功率"])
+        fh.addRow("方式", self.mode)
+        self.target = QtWidgets.QDoubleSpinBox(); self.target.setRange(200, 1600); self.target.setValue(900)
+        fh.addRow("外表面目标 °C", self.target)
+        self.power = QtWidgets.QDoubleSpinBox(); self.power.setRange(0.1, 500); self.power.setValue(6.0)
+        fh.addRow("工件吸收功率 kW", self.power)
+        self.theat = QtWidgets.QDoubleSpinBox(); self.theat.setRange(0.1, 60); self.theat.setValue(3.0)
+        fh.addRow("加热时间 s", self.theat)
+        self.mur = QtWidgets.QDoubleSpinBox(); self.mur.setRange(1, 200); self.mur.setValue(20)
+        fh.addRow("冷态有效磁导率 μr", self.mur)
+        left.addWidget(gh)
+
+        gq = QtWidgets.QGroupBox("冷却")
+        fq = QtWidgets.QFormLayout(gq)
+        self.medium = QtWidgets.QComboBox()
+        for k, n in MEDIA:
+            self.medium.addItem(n, k)
+        fq.addRow("介质", self.medium)
+        self.tdelay = QtWidgets.QDoubleSpinBox(); self.tdelay.setRange(0, 30); self.tdelay.setValue(0.0)
+        fq.addRow("断电到喷液延时 s", self.tdelay)
+        self.tq = QtWidgets.QDoubleSpinBox(); self.tq.setRange(0.1, 60); self.tq.setValue(3.0)
+        fq.addRow("淬火时间 s", self.tq)
+        self.inner = QtWidgets.QDoubleSpinBox(); self.inner.setRange(0, 1); self.inner.setSingleStep(0.1); self.inner.setValue(0.0)
+        fq.addRow("内孔也被冷却 (0~1)", self.inner)
+        left.addWidget(gq)
+
+        self.btn = QtWidgets.QPushButton("▶  开始模拟")
+        self.btn.setMinimumHeight(40)
+        self.btn.clicked.connect(self.start)
+        left.addWidget(self.btn)
+        self.bar = QtWidgets.QProgressBar(); left.addWidget(self.bar)
+        self.status = QtWidgets.QLabel("就绪"); self.status.setWordWrap(True); left.addWidget(self.status)
+        self.out = QtWidgets.QTextEdit(); self.out.setReadOnly(True); left.addWidget(self.out, 1)
+        lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setFixedWidth(330)
+        lay.addWidget(lw)
+
+        # ---------------- 右侧图
+        self.tabs = QtWidgets.QTabWidget()
+        self.cv = {}
+        for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度")]:
+            c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
+        lay.addWidget(self.tabs, 1)
+
+    def params(self):
+        geom = {k: self.e[k].value() for k in self.e}
+        geom["coil_z0"] = geom["neck_len"] - geom["zone"] - (geom["coil_h"] - geom["zone"]) / 2 - 0.5
+        return dict(
+            geom=geom, freq=float(self.freq.currentText()) * 1e3,
+            target=self.target.value() if self.mode.currentIndex() == 0 else None,
+            power_kw=self.power.value(), t_heat=self.theat.value(), mur_cold=self.mur.value(),
+            medium=self.medium.currentData(), t_delay=self.tdelay.value(), t_quench=self.tq.value(),
+            t_air=4.0, inner_quench=self.inner.value())
+
+    def start(self):
+        self.btn.setEnabled(False)
+        self.th = QtCore.QThread()
+        self.wk = Worker(self.params())
+        self.wk.moveToThread(self.th)
+        self.th.started.connect(self.wk.run)
+        self.wk.progress.connect(lambda v, s: (self.bar.setValue(v), self.status.setText(s)))
+        self.wk.done.connect(self.show_result)
+        self.wk.failed.connect(self.show_err)
+        self.wk.done.connect(self.th.quit); self.wk.failed.connect(self.th.quit)
+        self.th.start()
+
+    def show_err(self, tb):
+        self.btn.setEnabled(True)
+        self.status.setText("出错了")
+        self.out.setPlainText(tb)
+
+    def show_result(self, sim, r):
+        self.btn.setEnabled(True)
+        self.bar.setValue(100)
+        self.status.setText("完成")
+        self.sim = sim
+        txt = [
+            f"频率 {r['freq_kHz']:.0f} kHz，工件吸收 {r['power_kW']:.2f} kW",
+            f"透入深度：冷态 {r['skin_cold_mm']:.2f} mm，热态(>居里点) {r['skin_hot_mm']:.2f} mm",
+            f"加热结束：外表面 {r['T_surf_end_heat']:.0f}°C，内孔 {r['T_inner_end_heat']:.0f}°C，最高 {r['T_max']:.0f}°C",
+            f"线圈电流约 {r['coil_current_A']:.0f} A(有效值)，线圈铜损约 {r['coil_loss_kW']:.2f} kW，电效率约 {r['efficiency']*100:.0f}%",
+            f"淬火：{r['medium']}，t8/5 外表面 {r['t85_surface']:.2f} s / 内孔 {r['t85_inner']:.2f} s",
+            f"硬度(估算)：外表面 {r['HRC_surface']:.0f} HRC，内孔 {r['HRC_inner']:.0f} HRC",
+            f"有效硬化层 (≥50 HRC)：{r['case_depth_mm']:.2f} mm" + ("，已淬透" if r['through_hardened'] else ""),
+        ]
+        if r["warnings"]:
+            txt.append("")
+            txt += ["⚠ " + w for w in r["warnings"]]
+        self.out.setPlainText("\n".join(txt))
+        for k, c in self.cv.items():
+            c.fig.clear()
+            ax = c.fig.add_subplot(111)
+            if k == "glow":
+                viz.plot_glow(ax, sim, title="加热结束瞬间（暗处看到的火色）")
+            elif k == "temp":
+                viz.plot_field(ax, sim, sim.T_end_heat, "inferno", "°C", 25, max(1000, sim.T_end_heat.max()), c.fig)
+                ax.set_title("加热结束温度场")
+            elif k == "hrc":
+                viz.plot_field(ax, sim, sim.HRC, viz.HRC_CMAP, "HRC", 18, 60, c.fig)
+                ax.set_title("淬火后硬度（估算）")
+            elif k == "curve":
+                viz.plot_curves(ax, sim)
+            elif k == "line":
+                viz.plot_hardness_line(ax, sim)
+                ax.set_title("淬火区中部：硬度随深度")
+            c.fig.tight_layout()
+            c.draw()
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("真实的世界 v0.4")
+        self.resize(1500, 900)
+        import os
+        from rw.gui_world import WorldPage
+        from rw.gui_struct_demo import StructDemoPage
+        from rw.gui_plc_demo import PLCDemoPage
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            from rw.plc.thermal_table import ThermalTable
+            th = ThermalTable()
+        except Exception:
+            th = None
+        self.top = QtWidgets.QTabWidget()
+        self.ind = InductionPage()
+        self.top.addTab(self.ind, "① 感应加热淬火")
+        st = QtWidgets.QTabWidget(); st.addTab(StructDemoPage(), "机架/桌子 受力")
+        pl = QtWidgets.QTabWidget(); self.plc_demo = PLCDemoPage(th); pl.addTab(self.plc_demo, "自己写 PLC 程序（单工位演示）")
+        self.plc = None
+        self.top.addTab(st, "② 结构受力")
+        self.top.addTab(pl, "③ PLC 虚拟调试")
+        self.st_tabs, self.plc_tabs = st, pl
+        self.world = WorldPage()
+        self.top.addTab(self.world, "④ 物理沙盒")
+        self.setCentralWidget(self.top)
+
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    if "--screenshot" in sys.argv:  # 自测：python3 app.py --screenshot out.png [induction|struct|plc]
+        i = sys.argv.index("--screenshot")
+        out = sys.argv[i + 1]
+        which = sys.argv[i + 2] if len(sys.argv) > i + 2 else "induction"
+        if which == "struct":
+            w.top.setCurrentIndex(1)
+            QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("world"):
+            w.top.setCurrentIndex(3)
+            sub = int(which[-1]) if which[-1].isdigit() else 0
+            w.world.tabs.setCurrentIndex(sub)
+            if sub == 0:
+                pg = w.world.tabs.widget(0)
+                pg.fluid.setCurrentIndex(0); pg.T.setValue(150); pg.depth.setValue(50)
+            QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
+        elif which == "plcdemo":
+            w.top.setCurrentIndex(2); w.plc_tabs.setCurrentWidget(w.plc_demo)
+            w.plc_demo.load(); w.plc_demo.spd.setCurrentIndex(2)
+            QtCore.QTimer.singleShot(800, lambda: w.plc_demo.sim.press("X000"))
+            QtCore.QTimer.singleShot(5200, lambda: (w.grab().save(out), app.quit()))
+        elif which == "structdemo":
+            w.top.setCurrentIndex(1); w.st_tabs.setCurrentIndex(w.st_tabs.count() - 1)
+            QtCore.QTimer.singleShot(1000, lambda: (w.grab().save(out), app.quit()))
+        else:
+            m = w.ind
+            m.mode.setCurrentIndex(1); m.power.setValue(6.0)
+            m.start()
+            poll = QtCore.QTimer(w)
+
+            def check():
+                if m.btn.isEnabled():
+                    poll.stop()
+                    QtCore.QTimer.singleShot(500, lambda: (w.grab().save(out), app.quit()))
+            poll.timeout.connect(check)
+            poll.start(300)
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

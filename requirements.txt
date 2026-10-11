@@ -1,0 +1,8 @@
+numpy
+scipy
+matplotlib
+scikit-fem>=10
+PySide6-Essentials>=6.6
+trimesh
+networkx
+rtree
