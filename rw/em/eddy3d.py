@@ -157,7 +157,7 @@ class TubeInCoil3D:
         self.nedges = self.basis.N
         return self
 
-    def solve(self):
+    def solve(self, permc='NATURAL'):
         b = self.basis
         K = asm(_cc, b, nu=self._el_to_qp(self.nu))
         Mm = asm(_mm, b, sig=self._el_to_qp(self.sig))
@@ -167,7 +167,7 @@ class TubeInCoil3D:
         D = b.get_dofs().all()
         x = np.zeros(A.shape[0], complex)
         Ac, bc, xc, Iin = condense(A, f.astype(complex), x=x, D=D)
-        x[Iin] = spla.splu(Ac.tocsc(), permc_spec='NATURAL').solve(bc)   # 结构网格自然序 = 带状，比 COLAMD/MMD 快很多
+        x[Iin] = spla.splu(Ac.tocsc(), permc_spec=permc).solve(bc)   # 结构网格自然序 = 带状；非结构网格(gmsh)用 COLAMD 防 fill-in
         self.x = x
         # 功率密度 (按单元)
         Ar = b.interpolate(x.real).value

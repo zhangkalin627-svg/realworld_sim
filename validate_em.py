@@ -80,6 +80,47 @@ def run():
         print(f"[11f] 偏心 {e1['ecc_mm']:g} mm: 管壁方位功率最大/最小 {s1.max()/s1.min():.3f}，总功率 {100*(e1['P_3d']/e0['P_3d']-1):+.1f}%")
     else:
         print("[11f] 三维缓存结果不存在，跳过 (运行 study_3d 生成)")
+
+    # g) 非圆截面涡流 (v0.14, gmsh 可选依赖): ①同几何空心管对照结构网格缓存 ②方坯物理检查。现场跑粗网格(≈1.5 万四面体/例, 共约 30 s)
+    try:
+        import gmsh as _gmsh_chk  # noqa: F401
+        from rw.em.eddy3d_gmsh import BilletInCoil3D
+    except ImportError:
+        print("[11g] gmsh 未安装，跳过非圆截面涡流自检 (pip install gmsh 可解锁，不影响其它功能)")
+    else:
+        import gc
+        pt = BilletInCoil3D(a=0.0, ri=8.0, ro=11.0, ecc_mm=0.0).build().solve()
+        msg = f"[11g] gmsh 非结构网格·同几何空心管 ({pt.mesh.t.shape[1]} 四面体): P={pt.P_tube:.2f} W"
+        if os.path.exists(fn):
+            pr = json.load(open(fn))["ecc0"]
+            d3, d2 = pt.P_tube / pr["P_3d"] - 1, pt.P_tube / pr["P_2d"] - 1
+            print(f"{msg} | vs 结构网格 {pr['P_3d']:.2f} W {d3*100:+.2f}%，vs 轴对称 {pr['P_2d']:.2f} W {d2*100:+.2f}%")
+            assert abs(d3) < 0.06 and abs(d2) < 0.06
+        else:
+            print(msg + " (无结构网格缓存，仅自检运行)")
+        assert pt.P_air_reg / pt.P_tube < 0.01
+        del pt; gc.collect()
+        pb = BilletInCoil3D(a=20.0, ecc_mm=0.0).build().solve()
+        t4, pp = pb.mesh.t, pb.mesh.p                    # 网格为 SI 单位(m)，读数时换回 mm
+        cr = np.cross((pp[:, t4[1]] - pp[:, t4[0]]).T, (pp[:, t4[2]] - pp[:, t4[0]]).T)
+        vol = np.abs(np.sum(cr * (pp[:, t4[3]] - pp[:, t4[0]]).T, axis=1)) / 6.0
+        msk = pb.tube
+        assert abs(vol[msk].sum() * 1e9 / 28000 - 1) < 0.01          # 几何自检: 20×20×70 方坯体积
+        x, y, z = (pb.cen[i][msk] * 1000 for i in range(3))
+        pq, vv = pb.pq[msk], vol[msk]
+        zw = (z >= 27) & (z <= 52)                        # 线圈窗口
+        depth = 10.0 - np.maximum(np.abs(x), np.abs(y))   # 到方坯表面的距离
+        sf, co = zw & (depth < 1.5), zw & (depth > 4.5)
+        skin = (pq[sf].sum() / vv[sf].sum()) / (pq[co].sum() / vv[co].sum())
+        cor = sf & (np.minimum(np.abs(x), np.abs(y)) > 6.0)
+        fac = sf & (np.minimum(np.abs(x), np.abs(y)) < 3.0)
+        corner = (pq[cor].sum() / vv[cor].sum()) / (pq[fac].sum() / vv[fac].sum())
+        sym = pq[zw & (y > 0)].sum() / pq[zw & (y < 0)].sum()
+        air = pb.P_air_reg / pb.P_tube
+        print(f"[11g] 方坯 20×20 (δ≈3 mm): P={pb.P_tube:.2f} W，表层/心部功率密度 {skin:.1f}× (≫1 集肤)，"
+              f"角部/面心 {corner:.2f} (<1: δ 与角部过渡区重叠、两侧感应电流相消的「冷角」regime)，"
+              f"左右对称 {sym:.3f}，空气假损耗 {air*100:.2f}%")
+        assert skin > 3 and 0.9 < sym < 1.1 and 0.3 < corner < 3 and air < 0.01
     print("§11 全部通过")
 
 
