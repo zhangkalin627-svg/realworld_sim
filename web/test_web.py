@@ -13,7 +13,7 @@ print("[web-a] 首页 200 OK")
 
 mods = c.get("/api/modules").json()
 keys = {m["key"] for m in mods}
-assert {"induction", "materials"} <= keys, f"模块清单缺项: {keys}"
+assert {"induction", "materials", "world3d", "plc"} <= keys, f"模块清单缺项: {keys}"
 assert any(f.get("name") == "freq" for f in mods[0]["fields"]), "感应淬火表单缺字段"
 print(f"[web-b] 模块清单 {sorted(keys)}，表单 schema 完整")
 
@@ -52,4 +52,15 @@ import json as _j; _j.dumps(v)  # 必须可 JSON 序列化（无 numpy 残留）
 z0, zN = v["poses"]["工字钢"][0][2], v["poses"]["工字钢"][-1][2]
 assert abs(zN - z0) < 5, f"工字钢应静置于桥墩上（z0={z0:.0f} zN={zN:.0f}）"   # v0.18 接触对修复回归
 print(f"[web-e] 三维装配世界端到端 OK ({time.time()-t0:.0f}s): {len(names)} 零件, {len(v['times'])} 帧, 状态 {v['status']}")
+t0 = time.time()
+j = run_wait("plc", {"t_sim": 30})
+assert j["status"] == "done", j.get("error", "?")
+r = j["result"]
+assert r["raw"]["done"] >= 2, f"30 s 至少应完成 2 件: {r['raw']}"
+assert abs(r["raw"]["heat_s"] - 3.0) < 0.05 and abs(r["raw"]["quench_s"] - 3.0) < 0.05, "每件加热/淬火必须等于程序设定 3.0 s"
+assert r["raw"]["step_seq"][:5] == ["S0", "S20", "S21", "S22", "S23"], f"步进顺序错: {r['raw']['step_seq']}"
+assert len(r["plots"]) == 2 and all("<svg" in p["svg"] for p in r["plots"]), "时序图缺失"
+j2 = run_wait("plc", {"t_sim": 20, "scenario": "estop", "estop_at": 6.0})
+assert j2["status"] == "done" and any("急停" in l for l in j2["result"]["lines"]), "急停剧本未生效"
+print(f"[web-f] PLC 虚拟调试端到端 OK ({time.time()-t0:.0f}s): 30 s 完成 {r['raw']['done']} 件, 加热 {r['raw']['heat_s']:.2f}s/淬火 {r['raw']['quench_s']:.2f}s, 急停剧本 OK")
 print("web 冒烟测试全部通过")
