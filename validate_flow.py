@@ -1,4 +1,4 @@
-"""v0.11 流体检验 (validate.py 末尾会调用): 管网、泵、水箱放空、水锤、射流、气管 vs 理论 / `fluids` 库 / 独立算法"""
+"""流体检验（独立运行：python validate_flow.py，validate.py 不调用它）: 管网、泵、水箱放空、水锤、射流、气管 vs 理论 / `fluids` 库 / 独立算法"""
 import math
 import numpy as np
 from scipy.optimize import brentq

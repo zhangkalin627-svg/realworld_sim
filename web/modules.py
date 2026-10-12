@@ -188,7 +188,7 @@ MODULES = [
          {"name": "mur_cold", "label": "冷态有效磁导率 μr", "type": "number", "default": 20, "min": 1, "max": 200, "step": 1},
          {"name": "nonlinear", "label": "非线性 B-H + 居里点 (更准, 慢约 3 倍)", "type": "check", "default": False},
          {"name": "speed", "label": "速度档", "type": "select", "default": "accurate",
-          "options": [{"v": "accurate", "t": "精确（默认，验证基线）"}, {"v": "fast", "t": "快速（约 ×1.8，t8/5 偏差 ~0.001s，见 validate_accel.py）"}]},
+          "options": [{"v": "accurate", "t": "精确（默认，验证基线）"}, {"v": "fast", "t": "快速（×1.6-2.1；慢冷介质 t8/5 与频率两端 HRC 有偏差，精确结论用精确档）"}]},
          {"g": "冷却"},
          {"name": "medium", "label": "淬火介质", "type": "select", "default": "water_spray",
           "options": [{"v": "water_spray", "t": "清水喷淋"}, {"v": "polymer_spray", "t": "聚合物喷淋"}, {"v": "water_dip", "t": "清水浸入"}, {"v": "oil_dip", "t": "油浸"}, {"v": "air", "t": "空冷"}]},
@@ -333,7 +333,7 @@ def run_circuit(params, progress):
         except Exception as e:
             warns.append(f"频谱计算失败：{e}")
     if wa is not None:
-        node = chans[-1] if chans and chans[-1] in wa else (wa.nets() or [None])[-1]
+        node = chans[-1] if chans and chans[-1] in wa.nets() else (wa.nets() or [None])[-1]
         v = np.asarray(wa[node])
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(7, 4.6), sharex=True)
         a1.semilogx(wa.freq, 20 * np.log10(np.maximum(np.abs(v), 1e-15)), lw=1.2); a1.set_ylabel("dB"); a1.grid(True, alpha=.3)

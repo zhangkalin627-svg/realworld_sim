@@ -559,7 +559,8 @@ class InductionQuenchSim:
             T_zone_min=float(Tm[inzone].min()),
             coil_current_A=float(self.I_end / np.sqrt(2)),  # 有效值
             coil_loss_kW=float(Pc / 1e3),
-            efficiency=float(self.P / (self.P + Pc + Pcn)),
+            efficiency=float(np.divide(self.P, self.P + Pc + Pcn, out=np.full_like(self.P, float('nan'), dtype=float),
+                                       where=(self.P + Pc + Pcn) != 0)),
             conc_loss_kW=float(Pcn / 1e3),
             nonlinear=bool(self.nonlinear),
             conc=(self.conc.mat.name if self.conc is not None else None),
