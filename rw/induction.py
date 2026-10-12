@@ -159,8 +159,8 @@ def _h_lin(v, w):
 class InductionQuenchSim:
     def __init__(self, geom=None, freq=30e3, power_kw=9.0, t_heat=3.0, t_delay=0.0,
                  medium="water_spray", t_quench=3.0, t_air=6.0, inner_quench=0.0,
-                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, dT_em=25.0, verbose=False, accel=False,
-                 nonlinear=False, bh=None, conc=None):
+                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False, accel=False,
+                 nonlinear=False, bh=None, conc=None, *, dT_em=25.0):
         self.g = geom or BottleNeckGeometry()
         self.f = freq
         self.P = power_kw * 1e3
@@ -174,6 +174,7 @@ class InductionQuenchSim:
         self.dt_mult = {"heat": 1, "delay": 2, "quench": 1, "air": 10} if accel else {"heat": 1, "delay": 1, "quench": 1, "air": 1}
         self.em_every = em_every
         # v0.27 事件触发 EM 重解：距上次求解的温度变化超过 dT_em(K) 立即重解（em_every 变成最长间隔）。
+        # v0.27.1 dT_em 移到签名末尾并仅限关键字：保持旧位置参数语义不变（卡布审查发现）。
         # 穿越居里区(650-850°C, μ 塌缩)时非线性模式自动收紧到 10K。
         self.dT_em = float(dT_em)
         self.verbose = verbose
