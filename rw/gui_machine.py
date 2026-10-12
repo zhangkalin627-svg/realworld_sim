@@ -34,7 +34,7 @@ class MachinePage(QtWidgets.QWidget):
         self.m = None; self.S = None; self.worker = None
         lay = QtWidgets.QHBoxLayout(self)
         left = QtWidgets.QVBoxLayout()
-        gb = QtWidgets.QGroupBox("整机联动（通用 10 kW 级 30 kHz 感应淬火机，演示参数）")
+        gb = QtWidgets.QGroupBox("整机联动（通用 100 kW 感应淬火电源，20–40 kHz，演示参数；【满功率】/【部分功率】场景含器件温升与 8 h 外推）")
         gb.setStyleSheet("QGroupBox{font-weight:bold}")
         fl = QtWidgets.QFormLayout(gb)
         intro = QtWidgets.QLabel("按下启动 → PLC 开冷却水 → 预充电 → 合旁路 → 变频器就绪 → 线圈下降 → 高频加热(红外测温) → 喷淋淬火 → 线圈上升；"
@@ -65,6 +65,8 @@ class MachinePage(QtWidgets.QWidget):
         self.tabs = QtWidgets.QTabWidget()
         self.fig = Figure(figsize=(9, 8)); self.cv = FigureCanvasQTAgg(self.fig)
         self.tabs.addTab(self.cv, "整机曲线")
+        self.fig2 = Figure(figsize=(9, 6)); self.cv2 = FigureCanvasQTAgg(self.fig2)
+        self.tabs.addTab(self.cv2, "器件温升 / 8 h 外推")
         self.tbl = QtWidgets.QTableWidget(); self.tabs.addTab(self.tbl, "每件工件结果")
         self.evt = QtWidgets.QPlainTextEdit(); self.evt.setReadOnly(True); self.evt.setFont(QtGui.QFont("monospace", 10))
         self.tabs.addTab(self.evt, "事件时间线")
@@ -108,6 +110,7 @@ class MachinePage(QtWidgets.QWidget):
                           (f"{S['t_bus90']:.2f} s" if S["t_bus90"] else "—") + "，变频器就绪 " + (f"{S['t_ready']:.2f} s" if S["t_ready"] else "—") +
                           f"；输出峰值电流 {S['I_pk_max']:.0f} A</span>")
         plot_machine(self.fig, m); self.cv.draw()
+        self._plot_thermal(m, S)
         rows = m.done
         self.tbl.clear(); self.tbl.setColumnCount(8); self.tbl.setRowCount(len(rows))
         self.tbl.setHorizontalHeaderLabels(["工件", "判定", "加热 s", "等效加热 s", "峰值 °C", "等效淬火 s", "HRC(表)", "说明"])
@@ -120,3 +123,26 @@ class MachinePage(QtWidgets.QWidget):
                 self.tbl.setItem(i, j, it)
         self.tbl.resizeColumnsToContents()
         self.evt.setPlainText("\n".join(f"{t:8.2f} s  {s}" for t, s in m.events))
+
+    def _plot_thermal(self, m, S):
+        """详细仿真段的器件温度 + （若有）8 h 外推。"""
+        import numpy as np
+        f = self.fig2; f.clear()
+        L = m.log
+        if m.net is None or not L.get("Tj"):
+            f.text(0.5, 0.5, "该场景没有器件温升网络", ha="center"); self.cv2.draw(); return
+        lr = S.get("lr")
+        ax = f.add_subplot(2 if lr else 1, 1, 1)
+        t = np.array(L["t"])
+        for k, lab in (("Tj", "IGBT 结温"), ("T_plate", "IGBT 基板"), ("T_w", "冷却进水"), ("T_tr", "变压器"), ("T_cap", "谐振电容"), ("T_coil", "线圈")):
+            ax.plot(t, L[k], label=lab)
+        ax.set_xlabel("t / s（详细仿真）"); ax.set_ylabel("°C"); ax.grid(alpha=.3); ax.legend(fontsize=8, ncol=3)
+        if lr:
+            se = lr["series"]; ax2 = f.add_subplot(2, 1, 2)
+            for k, lab in (("Tj", "IGBT 结温(均值)"), ("T_plate", "IGBT 基板"), ("T_w", "冷却进水"), ("T_tr", "变压器"), ("T_cap", "谐振电容"),
+                           ("T_can", "电解电容芯"), ("T_cab", "柜内"), ("T_coil", "线圈"), ("T_tank", "淬火水箱")):
+                ax2.plot(se["h"], se[k], label=lab)
+            if lr["trip"]:
+                ax2.axvline(lr["trip"][0], color="r", ls="--"); ax2.text(lr["trip"][0], ax2.get_ylim()[1], " " + lr["trip"][2], color="r", va="top", fontsize=8)
+            ax2.set_xlabel("h（按平均损耗外推，估算）"); ax2.set_ylabel("°C"); ax2.grid(alpha=.3); ax2.legend(fontsize=8, ncol=3)
+        f.tight_layout(); self.cv2.draw()

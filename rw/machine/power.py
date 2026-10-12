@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """主回路：三相整流 + 母线电容(含预充电) + 全桥逆变 + 串联谐振负载（基波近似） + 变频器控制固件（行为级）。
-全部参数是“通用 10 kW 级 30 kHz 感应加热电源”的假设值，不是任何具体产品。
+默认参数是“通用 100 kW 级 20–40 kHz 感应加热电源”的假设值（用户 2026-10-12 定整机按 100 kW 通用机），不是任何具体产品；
+旧版 10 kW 示例机保留为 Spec.preset("10kW")。负载参数是“折算到逆变器输出侧”的等效值（经匹配变压器，匝比 cool.n_tr）。
+器件损耗/温升/保护瞬态见 stress.py。
 
 模型层次（为什么这样分）：
 - 微秒级的开关波形由 v0.6/v0.7 的 ngspice 与指令级 MCU 负责；整机要跑几十秒到几小时，
@@ -25,46 +27,78 @@ def _steel_s(T):
 
 @dataclass
 class Spec:
+    rated_kW: float = 100.0
     # 电网与母线
     V_ll: float = 380.0          # 线电压 V
-    Rs: float = 0.12             # 电网+变压器+整流等效串联电阻 Ω
-    L_line: float = 0.5e-3       # 进线电抗 H
-    C_bus: float = 2.0e-3        # 母线电容 F
-    R_pc: float = 100.0          # 预充电阻 Ω
-    R_bleed: float = 100e3       # 泄放电阻 Ω
-    I_dc_rated: float = 25.0     # 直流侧额定电流 A（冲击电流判定基准）
-    # 谐振负载（折算到逆变器输出侧）
-    L_wp_cold: float = 130e-6    # 有工件(冷、有磁性)时线圈电感 H
-    L_wp_hot: float = 138e-6     # 有工件(过居里点)时
-    L_empty: float = 150e-6      # 空线圈
-    C_res: float = 0.328e-6      # 谐振电容 F
-    R_coil: float = 0.8          # 线圈铜损等效电阻（20°C）Ω
-    R_wp20: float = 6.4          # 工件等效电阻 20°C Ω（随 sqrt(ρ·μr) 变化）
+    Rs: float = 0.02             # 电网+变压器+整流等效串联电阻 Ω（冲击电流用）
+    L_line: float = 0.15e-3      # 进线电抗 H（≈3.3 %，以 100 kW/380 V 为基准）
+    C_bus: float = 12.0e-3       # 母线电容 F
+    R_pc: float = 33.0           # 预充电阻 Ω（τ = 0.40 s）
+    R_bleed: float = 20e3        # 泄放电阻 Ω
+    I_dc_rated: float = 210.0    # 直流侧额定电流 A（冲击电流判定基准）
+    # 谐振负载（折算到逆变器输出侧；= 旧 10 kW 示例按阻抗 ×0.352 缩放：谐振频率、Q 值不变，满功率在热态 f/f0≈1.07）
+    L_wp_cold: float = 45.8e-6   # 有工件(冷、有磁性)时线圈电感 H
+    L_wp_hot: float = 48.6e-6    # 有工件(过居里点)时
+    L_empty: float = 52.8e-6     # 空线圈
+    C_res: float = 0.932e-6      # 谐振电容 F
+    R_coil: float = 0.293        # 线圈+引线+变压器绕组铜损等效电阻（20°C）Ω
+    R_wp20: float = 2.25         # 工件等效电阻 20°C Ω（随 sqrt(ρ·μr) 变化）
     alpha_cu: float = 0.0039
-    # 逆变器
-    R_sw: float = 0.05           # 开关管导通等效电阻 Ω
-    E_sw: float = 0.4e-3         # 100 A 时每周期开关能量 J（关断损耗，ZVS 之上工作）
-    P_ctrl: float = 40.0         # 驱动+控制耗电 W
+    frac_tr: float = 0.10        # R_coil 里匹配变压器绕组占比（假设）
+    frac_lead: float = 0.15      # R_coil 里高频引线占比（假设），其余是线圈本体
+    # 逆变器（器件模型见 stress.Module；旧版 R_sw/E_sw 仅 10kW 预设用）
+    R_sw: float = 0.0
+    E_sw: float = 0.0
+    P_ctrl: float = 200.0        # 驱动+控制耗电 W
+    use_device_model: bool = True
     # 保护
-    I_trip_pk: float = 110.0     # 过流跳闸 A(峰值)
+    I_trip_pk: float = 480.0     # 过流跳闸 A(峰值)：硬件比较器逐周期 + 软件环 1 kHz
     V_uv: float = 330.0          # 母线欠压跳闸 V
     V_ov: float = 700.0
     V_ready: float = 410.0       # 就绪所需母线电压（80% 额定）
     f_max: float = 60e3
     f_zvs: float = 1.04          # 最低开关频率/谐振频率（保持感性负载，ZVS）
+    f_clk: float = 100e6         # 频率发生计数时钟 Hz（周期 = 整数个时钟 → Δf ≈ f²/f_clk），假设
     # 控制
-    P_set_out: float = 7.3e3     # 输出功率设定 W（线圈输出，含线圈损耗）
-    ramp: float = 25e3           # 软启动 W/s
-    Ki: float = 22.0             # kHz/(s·kW)
+    P_set_out: float = 100e3     # 输出功率设定 W（线圈输出，含线圈损耗）
+    ramp: float = 250e3          # 软启动 W/s
+    Ki: float = 0.0              # 旧参数 kHz/(s·kW)（10kW 预设用）；>0 时用旧的绝对误差积分
+    Ki_rel: float = 160.6        # kHz/s 每单位相对功率误差（= 旧 22 kHz/(s·kW) × 7.3 kW，动态与旧版一致）
     boot_s: float = 0.30
     # 冷却与线圈
-    C_coil: float = 120.0        # 线圈(铜管+水)热容 J/K
-    G_water: float = 530.0       # 水流满流量时线圈到水的热导 W/K
+    C_coil: float = 400.0        # 线圈(铜管+水)热容 J/K
+    G_water: float = 1500.0      # 水流满流量时线圈到水的热导 W/K
+    Q_cw_Lmin: float = 30.0      # 线圈冷却水额定流量 L/min
     coil_warn: float = 60.0
     coil_fail: float = 150.0
+    use_thermal_net: bool = True
+    mod: object = None
+    cool: object = None
+
+    def __post_init__(self):
+        from .stress import Module, CoolingSpec
+        if self.mod is None:
+            self.mod = Module()
+        if self.cool is None:
+            self.cool = CoolingSpec()
 
     def V_src(self, sag=1.0):
         return 1.35 * self.V_ll * sag
+
+    def R_comm(self):
+        """二极管整流换相压降的等效电阻 3ωL/π（整流平均模型用）。"""
+        return 3 * 2 * math.pi * 50.0 * self.L_line / math.pi
+
+    @classmethod
+    def preset(cls, name="100kW", **kw):
+        if name == "10kW":
+            d = dict(rated_kW=10.0, Rs=0.12, L_line=0.5e-3, C_bus=2.0e-3, R_pc=100.0, R_bleed=100e3, I_dc_rated=25.0,
+                     L_wp_cold=130e-6, L_wp_hot=138e-6, L_empty=150e-6, C_res=0.328e-6, R_coil=0.8, R_wp20=6.4,
+                     R_sw=0.05, E_sw=0.4e-3, P_ctrl=40.0, use_device_model=False, I_trip_pk=110.0, P_set_out=7.3e3,
+                     ramp=25e3, Ki=22.0, C_coil=120.0, G_water=530.0, Q_cw_Lmin=8.0, use_thermal_net=False, f_clk=0.0)
+            d.update(kw)
+            return cls(**d)
+        return cls(**kw)
 
 
 class Bus:
@@ -106,10 +140,11 @@ class Bus:
         sp = self.sp; V = max(self.V, 1e-3)
         Vold = self.V
         if self.k2:
-            disc = Vsrc * Vsrc - 4 * P_load * sp.Rs
+            Rq = sp.Rs + (sp.R_comm() if sp.use_device_model else 0.0)
+            disc = Vsrc * Vsrc - 4 * P_load * Rq
             Vn = (Vsrc + math.sqrt(disc)) / 2 if disc >= 0 else Vsrc / 2
             Isrc = P_load / max(Vn, 1.0) + sp.C_bus * (Vn - Vold) / dt
-            self.E_R += Isrc * Isrc * sp.Rs * dt
+            self.E_R += Isrc * Isrc * Rq * dt
         elif self.k1:
             # C dV/dt = (Vsrc − V)/Rpc − P/V − V/Rbleed（二极管单向，V>Vsrc 时不倒灌）
             Ic = max((Vsrc - V) / sp.R_pc, 0.0)
@@ -139,6 +174,7 @@ class Stage:
 
     def __init__(self, sp: Spec):
         self.sp = sp
+        self.short = False            # 故障注入：工件碰线圈，工件等效电阻被短接
 
     def L_of(self, T_wp, k):
         sp = self.sp
@@ -149,7 +185,7 @@ class Stage:
     def R_parts(self, T_wp, k, T_coil):
         sp = self.sp
         Rc = sp.R_coil * (1 + sp.alpha_cu * (T_coil - 20.0))
-        Rw = sp.R_wp20 * _steel_s(T_wp) * k * k
+        Rw = 0.0 if self.short else sp.R_wp20 * _steel_s(T_wp) * k * k
         return Rc, Rw
 
     def f0(self, T_wp, k):
@@ -166,9 +202,17 @@ class Stage:
         Z = math.sqrt(R * R + X * X)
         I = V1 / Z
         P_out = I * I * R
-        P_loss = sp.R_sw * I * I + sp.E_sw * f * (I / 70.0) + sp.P_ctrl
+        if sp.use_device_model:
+            from .stress import inverter_losses
+            inv = inverter_losses(I * math.sqrt(2), math.atan2(X, R), f, Vbus, sp.mod)
+            P_loss = inv["P_total"] + sp.P_ctrl
+            mode = inv["mode"]; I_off = inv["I_off"]
+        else:
+            P_loss = sp.R_sw * I * I + sp.E_sw * f * (I / 70.0) + sp.P_ctrl
+            mode = "ZVS" if X >= 0 else "容性"; I_off = I * math.sqrt(2) * X / Z
         return dict(I=I, I_pk=I * math.sqrt(2), P_out=P_out, P_wp=I * I * Rw, P_coil=I * I * Rc, P_inv=P_loss,
-                    P_in=P_out + P_loss, X=X, Z=Z, V1=V1, cosphi=R / Z, f0=self.f0(T_wp, k))
+                    P_in=P_out + P_loss, X=X, Z=Z, R=R, V1=V1, cosphi=R / Z, f0=self.f0(T_wp, k), mode=mode, I_off=I_off,
+                    Vc=I / (w * sp.C_res), f=f)
 
 
 class Controller:
@@ -181,6 +225,8 @@ class Controller:
         self.p_ref = 0.0; self.p_meas = 0.0; self.fault = ""; self.ready = False; self.reached = False
         self.running = False; self.t_en_low = 0.0; self.t_sat = 0.0; self.sat = False
         self.fault_log = []
+        self.ext_trip = None          # (code, text)：过温等外部保护由 Machine 置位
+        self.f_q = self.f
 
     def tick(self, dt, en, Vbus, stage_fn, f0_fn):
         """stage_fn(f) → 功率级测量字典；f0_fn() → 当前谐振频率估计(锁相环给出)。返回 stage dict 或 None(未开管)。"""
@@ -217,10 +263,18 @@ class Controller:
         fmin = f0_fn() * sp.f_zvs
         s = stage_fn(self.f)
         self.p_meas += (s["P_out"] - self.p_meas) * min(1.0, dt / 2e-3)
-        e = (self.p_ref - self.p_meas) / 1e3
-        self.f -= sp.Ki * e * dt * 1e3
+        if sp.Ki > 0:
+            e = (self.p_ref - self.p_meas) / 1e3
+            self.f -= sp.Ki * e * dt * 1e3
+        else:
+            e = (self.p_ref - self.p_meas) / max(sp.P_set_out, 1.0)
+            self.f -= sp.Ki_rel * e * dt * 1e3
         self.f = float(np.clip(self.f, fmin, sp.f_max))
-        s = stage_fn(self.f)
+        self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f   # 周期计数量化
+        s = stage_fn(self.f_q)
+        if self.ext_trip:
+            code, text = self.ext_trip; self.ext_trip = None
+            return self._trip(code, text, s)
         if s["I_pk"] > sp.I_trip_pk:
             return self._trip("OC", f"过流 {s['I_pk']:.0f} A 峰值", s)
         self.sat = self.f <= fmin + 1.0 and self.p_meas < 0.95 * self.p_ref
