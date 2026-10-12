@@ -5,3 +5,4 @@ models/hfq6/
 models/private_boards/*
 *.pyc
 !models/private_boards/README.md
+realworld_jobs.db
