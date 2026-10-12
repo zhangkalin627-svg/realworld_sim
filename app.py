@@ -30,10 +30,14 @@ class Worker(QtCore.QObject):
             p = dict(self.p)
             geom = BottleNeckGeometry(**p.pop("geom"))
             target = p.pop("target")
+            ck = p.pop("conc_key")
+            if ck:
+                from rw.em.conc import Concentrator
+                p["conc"] = Concentrator(ck)
             if target is not None:
                 self.progress.emit(2, f"自动找功率：让外表面加热到 {target:.0f}°C …")
                 p["power_kw"] = find_power(target, geom=geom, freq=p["freq"], t_heat=p["t_heat"],
-                                           mur_cold=p["mur_cold"])
+                                           mur_cold=p["mur_cold"], nonlinear=p["nonlinear"], conc=p.get("conc"))
             self.progress.emit(10, f"计算中：{p['power_kw']:.2f} kW …")
             sim = InductionQuenchSim(geom=geom, **p)
             res = sim.run(progress=lambda x: self.progress.emit(10 + int(88 * x), "加热 → 淬火 …"))
@@ -80,6 +84,14 @@ class InductionPage(QtWidgets.QWidget):
         fh.addRow("加热时间 s", self.theat)
         self.mur = QtWidgets.QDoubleSpinBox(); self.mur.setRange(1, 200); self.mur.setValue(20)
         fh.addRow("冷态有效磁导率 μr", self.mur)
+        self.nl = QtWidgets.QCheckBox("非线性 B-H + 居里点 (更准, 慢约 3 倍)")
+        fh.addRow(self.nl)
+        self.conc = QtWidgets.QComboBox()
+        self.conc.addItem("无导磁体", None)
+        from rw.em.bh import FLUX_MATERIALS
+        for k, mt in FLUX_MATERIALS.items():
+            self.conc.addItem(mt.name, k)
+        fh.addRow("线圈导磁体", self.conc)
         left.addWidget(gh)
 
         gq = QtWidgets.QGroupBox("冷却")
@@ -109,7 +121,7 @@ class InductionPage(QtWidgets.QWidget):
         # ---------------- 右侧图
         self.tabs = QtWidgets.QTabWidget()
         self.cv = {}
-        for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度")]:
+        for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度"), ("mur", "磁导率分布")]:
             c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
         lay.addWidget(self.tabs, 1)
 
@@ -121,7 +133,8 @@ class InductionPage(QtWidgets.QWidget):
             target=self.target.value() if self.mode.currentIndex() == 0 else None,
             power_kw=self.power.value(), t_heat=self.theat.value(), mur_cold=self.mur.value(),
             medium=self.medium.currentData(), t_delay=self.tdelay.value(), t_quench=self.tq.value(),
-            t_air=4.0, inner_quench=self.inner.value())
+            t_air=4.0, inner_quench=self.inner.value(),
+            nonlinear=self.nl.isChecked() or self.conc.currentData() is not None, conc_key=self.conc.currentData())
 
     def start(self):
         self.btn.setEnabled(False)
@@ -154,6 +167,8 @@ class InductionPage(QtWidgets.QWidget):
             f"硬度(估算)：外表面 {r['HRC_surface']:.0f} HRC，内孔 {r['HRC_inner']:.0f} HRC",
             f"有效硬化层 (≥50 HRC)：{r['case_depth_mm']:.2f} mm" + ("，已淬透" if r['through_hardened'] else ""),
         ]
+        if r.get("nonlinear"):
+            txt.insert(1, "磁导率：非线性 B-H(含居里点)" + (f"；导磁体 {r['conc']}，其损耗 {r['conc_loss_kW']:.2f} kW" if r.get("conc") else ""))
         if r["warnings"]:
             txt.append("")
             txt += ["⚠ " + w for w in r["warnings"]]
@@ -174,6 +189,9 @@ class InductionPage(QtWidgets.QWidget):
             elif k == "line":
                 viz.plot_hardness_line(ax, sim)
                 ax.set_title("淬火区中部：硬度随深度")
+            elif k == "mur":
+                from rw.em.viz import plot_mur_map
+                plot_mur_map(ax, sim, "加热结束时磁导率分布 (log10 μ_eff)" if hasattr(sim, "_mur_el") else "")
             c.fig.tight_layout()
             c.draw()
 
@@ -181,7 +199,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.8")
+        self.setWindowTitle("真实的世界 v0.9")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -196,6 +214,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.top = QtWidgets.QTabWidget()
         self.ind = InductionPage()
         self.top.addTab(self.ind, "① 感应加热淬火")
+        from rw.gui_em import EMPage
+        self.em = EMPage()
+        self.top.addTab(self.em, "①b 电磁升级")
         st = QtWidgets.QTabWidget(); st.addTab(StructDemoPage(), "机架/桌子 受力")
         pl = QtWidgets.QTabWidget(); self.plc_demo = PLCDemoPage(th); pl.addTab(self.plc_demo, "自己写 PLC 程序（单工位演示）")
         self.plc = None
@@ -234,7 +255,34 @@ def main():
         i = sys.argv.index("--screenshot")
         out = sys.argv[i + 1]
         which = sys.argv[i + 2] if len(sys.argv) > i + 2 else "induction"
-        if which == "struct":
+        if which.startswith("em"):
+            # em0 B-H/居里点; em1 导磁体对比; em2 三维涡流; em3 ①页 非线性+导磁体完整加热
+            sub = int(which[2:]) if which[2:].isdigit() else 0
+            if sub == 3:
+                m = w.ind
+                m.mode.setCurrentIndex(1); m.power.setValue(6.0); m.theat.setValue(1.5); m.tq.setValue(0.3)
+                m.freq.setCurrentText("30"); m.nl.setChecked(True); m.conc.setCurrentIndex(m.conc.findData("smc"))
+                m.tabs.setCurrentIndex(5)
+                m.start()
+                poll = QtCore.QTimer(w)
+
+                def check3():
+                    if m.btn.isEnabled():
+                        poll.stop(); QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
+                poll.timeout.connect(check3); poll.start(500)
+                QtCore.QTimer.singleShot(280000, lambda: (w.grab().save(out), app.quit()))
+            else:
+                w.top.setCurrentWidget(w.em)
+                w.em.tabs.setCurrentIndex(sub)
+                if sub == 1:
+                    w.em.run_conc()
+                    pg = w.em
+                    poll = QtCore.QTimer(w)
+                    poll.timeout.connect(lambda: (poll.stop(), QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))) if pg.btn_c.isEnabled() else None)
+                    poll.start(500)
+                else:
+                    QtCore.QTimer.singleShot(1500, lambda: (w.grab().save(out), app.quit()))
+        elif which == "struct":
             w.top.setCurrentIndex(1)
             QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("world"):

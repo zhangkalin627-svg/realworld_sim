@@ -75,22 +75,37 @@ def _graded(a, b, h_a, h_b, growth=1.15):
     return np.unique(np.concatenate([pts_l, pts_r[::-1]]))
 
 
-def build_mesh(g: BottleNeckGeometry, h_skin=0.04):
+def build_mesh(g: BottleNeckGeometry, h_skin=0.04, conc=None):
     ri, ro = g.ri, g.ro
+    if conc is None:
+        r_out = [_graded(g.coil_r1, g.Rb, 0.6, 0.5), _graded(g.Rb, 90.0, 0.5, 8.0, 1.25)]
+        z_mid = [_graded(-g.Ls, 15.0, 0.5, 1.0), _graded(15.0, g.L, 1.0, h_skin * 3, 1.12)]
+        z_top = [_graded(g.L, g.coil_z1, h_skin * 3, 0.4), _graded(g.coil_z1, 150.0, 0.4, 8.0, 1.25)]
+    else:   # 导磁体边界要落在网格线上
+        a, b = sorted([g.Rb, conc.r_edges(g)])
+        r_out = [_graded(g.coil_r1, a, 0.6, 0.5), _graded(a, b, 0.5, 0.5), _graded(b, 90.0, 0.5, 8.0, 1.25)]
+        zl = g.coil_z0 - conc.leg_t
+        z_mid = [_graded(-g.Ls, 15.0, 0.5, 1.0)]
+        if conc.leg_t > 0:
+            z_mid += [_graded(15.0, zl, 1.0, 0.5), _graded(zl, g.coil_z0, 0.5, 0.5), _graded(g.coil_z0, g.L, 0.5, h_skin * 3, 1.12)]
+        else:
+            z_mid += [_graded(15.0, g.coil_z0, 1.0, 0.5), _graded(g.coil_z0, g.L, 0.5, h_skin * 3, 1.12)]
+        zt = g.coil_z1 + conc.leg_t
+        z_top = [_graded(g.L, g.coil_z1, h_skin * 3, 0.4)]
+        if conc.leg_t > 0:
+            z_top += [_graded(g.coil_z1, zt, 0.4, 0.5), _graded(zt, 150.0, 0.5, 8.0, 1.25)]
+        else:
+            z_top += [_graded(g.coil_z1, 150.0, 0.4, 8.0, 1.25)]
     r = np.concatenate([
         _graded(0, ri, 1.5, h_skin * 2),
         _graded(ri, ro, h_skin, h_skin, 1.12),
         _graded(ro, g.coil_r0, h_skin * 2, 0.3),
         _graded(g.coil_r0, g.coil_r1, 0.3, 0.6),
-        _graded(g.coil_r1, g.Rb, 0.6, 0.5),
-        _graded(g.Rb, 90.0, 0.5, 8.0, 1.25),
+        *r_out,
     ])
     z = np.concatenate([
         _graded(-80.0, -g.Ls, 8.0, 0.5, 1.25),
-        _graded(-g.Ls, 15.0, 0.5, 1.0),
-        _graded(15.0, g.L, 1.0, h_skin * 3, 1.12),
-        _graded(g.L, g.coil_z1, h_skin * 3, 0.4),
-        _graded(g.coil_z1, 150.0, 0.4, 8.0, 1.25),
+        *z_mid, *z_top,
     ])
     r = np.unique(np.round(r, 6))
     z = np.unique(np.round(z, 6))
@@ -144,7 +159,8 @@ def _h_lin(v, w):
 class InductionQuenchSim:
     def __init__(self, geom=None, freq=30e3, power_kw=9.0, t_heat=3.0, t_delay=0.0,
                  medium="water_spray", t_quench=3.0, t_air=6.0, inner_quench=0.0,
-                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False):
+                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False,
+                 nonlinear=False, bh=None, conc=None):
         self.g = geom or BottleNeckGeometry()
         self.f = freq
         self.P = power_kw * 1e3
@@ -156,6 +172,15 @@ class InductionQuenchSim:
         self.dt = dt
         self.em_every = em_every
         self.verbose = verbose
+        self.nonlinear = nonlinear          # True: 45 钢用非线性 B-H(含居里点)，False: 旧的线性有效 μr(T)
+        from .em.bh import STEEL45_BH
+        self.bh = bh or STEEL45_BH
+        self.conc = conc                    # rw.em.conc.Concentrator 或 None
+        self._mur_state = None
+        self.conc_loss_W = 0.0
+        self.em_tol = 0.012
+        if nonlinear or conc is not None:
+            self.em_every = max(em_every, 0.1)   # 温度变化慢，非线性迭代贵
         h_skin = min(0.04, 0.25 * self.skin_depth_mm(25.0))
         self._setup(h_skin)
 
@@ -167,13 +192,14 @@ class InductionQuenchSim:
     # -------------------------------------------------------------- setup
     def _setup(self, h_skin):
         g = self.g
-        mm = build_mesh(g, h_skin)
+        mm = build_mesh(g, h_skin, self.conc)
         self.mesh_mm = mm
         m = MeshTri(mm.p * 1e-3, mm.t)          # 计算用 SI 单位 (m)
         self.mesh = m
         c = mm.p[:, mm.t].mean(axis=1)           # 单元中心 (mm)
         self.steel_el = g.is_steel(c[0], c[1])
         self.coil_el = g.is_coil(c[0], c[1])
+        self.conc_el = self.conc.mask(g, c[0], c[1]) if self.conc is not None else np.zeros_like(self.coil_el)
         self.basis = Basis(m, ElementTriP1())
         self.b0 = self.basis.with_element(ElementTriP0())
         # Dirichlet: 轴线 r=0 和外边界 A=0
@@ -218,28 +244,122 @@ class InductionQuenchSim:
 
     # -------------------------------------------------------------- 电磁
     def solve_em(self, T_th):
-        """给定钢的温度场，返回每个钢单元的焦耳热密度 (W/m3)、所需线圈电流 (A)。"""
+        """给定钢的温度场，返回每个钢单元的焦耳热密度 (W/m3)、所需线圈电流 (A)。
+        nonlinear=False 且无导磁体: 线性(有效 μr(T))，一次求解。
+        否则: 磁导率逐单元迭代 (描述函数法/基波)，每步同时按功率设定重算线圈电流，直到自洽。"""
         T_el = np.full(self.mesh.t.shape[1], self.T0)
         T_el[self.steel_idx] = T_th[self.th_mesh.t].mean(axis=0)
-        mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
         sig = np.where(self.steel_el, M.steel_sigma(T_el), 0.0)
         w = 2 * np.pi * self.f
+        areas = self._el_area_r()
+        if not self.nonlinear and self.conc is None:
+            mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
+            x, I_coil, P1 = self._em_solve(mur, sig, w)
+            self.n_iter_em = 1
+        else:
+            mur = self._init_mur(T_el)
+            act = self.steel_el | self.conc_el
+            xs, fs = [], []                       # Anderson 加速的历史 (log μ)
+            for it in range(40):
+                x, I_coil, P1 = self._em_solve(mur, sig, w)
+                B1 = self._B1(x) * I_coil
+                new = mur.copy()
+                if self.nonlinear:
+                    m = self.steel_el
+                    new[m] = self.bh.mur_from_B1(B1[m], T_el[m])
+                if self.conc is not None:
+                    m = self.conc_el
+                    new[m] = self.conc.mat.curve.mur_from_B1(B1[m], 20.0)
+                chg = np.abs(np.log(new / mur))
+                chg = chg[(B1 > 0.02) & act]
+                dmax = float(chg.max()) if chg.size else 0.0
+                if getattr(self, "verbose", False): print("  em it", it, "dmax", round(dmax, 4), "I", round(I_coil))
+                if dmax < self.em_tol:        # 收敛: 这次求解用的 μ 与更新值一致, x、I 与 μ 自洽
+                    break
+                # 不动点 y = log new；Anderson(m=5) + 阻尼 0.6
+                xk = np.log(mur[act]); fk = np.log(new[act]) - xk
+                xs.append(xk); fs.append(fk)
+                xs, fs = xs[-6:], fs[-6:]
+                beta = 0.6
+                if len(xs) >= 2:
+                    dF = np.stack([fs[i + 1] - fs[i] for i in range(len(fs) - 1)], axis=1)
+                    dX = np.stack([xs[i + 1] - xs[i] for i in range(len(xs) - 1)], axis=1)
+                    gam = np.linalg.lstsq(dF, fk, rcond=1e-8)[0]
+                    xn = xk + beta * fk - (dX + beta * dF) @ gam
+                else:
+                    xn = xk + beta * fk
+                mur = mur.copy()
+                mur[act] = np.exp(np.clip(xn, 0.0, np.log(8000.0)))
+            self._mur_state = mur
+            self.n_iter_em = it + 1
+            self._B1_el = B1
+            self._mur_el = mur
+            if self.conc is not None:
+                pv, _, _ = self.conc.mat.loss_density(B1, self.f)
+                self.conc_pv = np.where(self.conc_el, pv, 0.0)
+                self.conc_loss_W = float(np.sum(self.conc_pv * areas * 2 * np.pi))
+        a_el = np.abs(x[self.mesh.t]) ** 2
+        q_el = 0.5 * sig * w**2 * a_el.mean(axis=0)
+        q = q_el[self.steel_idx] * I_coil**2
+        self._last_A = x * I_coil
+        return q, I_coil
+
+    def _init_mur(self, T_el):
+        if self._mur_state is not None:
+            mur = self._mur_state.copy()
+        else:
+            mur = np.ones(self.mesh.t.shape[1])
+            if self.nonlinear:
+                mur[self.steel_el] = 30.0
+            else:
+                mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
+            if self.conc is not None:
+                mur[self.conc_el] = self.conc.mat.curve.mu_i * 0.2
+        if self.nonlinear:   # 超过居里点必为 1
+            hot = self.steel_el & (T_el >= self.bh.Tc)
+            mur[hot] = 1.0
+        return mur
+
+    def _em_solve(self, mur, sig, w):
+        """线性求解(给定 μ)，单位电流；再按功率设定缩放。返回 (A 复振幅(已缩放), I 峰值, 每1A^2功率)"""
         K = asm(_k_em, self.basis, mu=self.b0.interpolate(MU0 * mur))
         Mm = asm(_m_em, self.basis, sig=self.b0.interpolate(sig))
         A = (K + 1j * w * Mm).tocsc()
         x = np.zeros(A.shape[0], complex)
         Ac, bc, xc, I = condense(A, self.f_unit.astype(complex), x=x, D=self.em_D)
         x[I] = spla.spsolve(Ac.tocsc(), bc)
-        # 焦耳热 q = 0.5 sigma w^2 |A|^2 （单元平均，P1 → 用顶点均值的平方近似，再加单元内方差）
         a_el = np.abs(x[self.mesh.t]) ** 2
         q_el = 0.5 * sig * w**2 * a_el.mean(axis=0)
-        # 工件功率 (每 1 A^2)
-        areas = self._el_area_r()
-        P1 = np.sum(q_el * areas * 2 * np.pi)
+        P1 = np.sum(q_el * self._el_area_r() * 2 * np.pi)
         I_coil = np.sqrt(self.P / P1)
-        q = q_el[self.steel_idx] * I_coil**2
-        self._last_A = x * I_coil
-        return q, I_coil
+        self._x_unit = x
+        return x, I_coil, P1
+
+    def _grad_ops(self):
+        if not hasattr(self, "_Gr"):
+            import scipy.sparse as sp
+            p, t = self.mesh.p, self.mesh.t
+            r, z = p[0, t], p[1, t]             # (3, nel)
+            A2 = (r[1] - r[0]) * (z[2] - z[0]) - (r[2] - r[0]) * (z[1] - z[0])
+            # P1 形函数梯度: dN_i/dr = (z_j - z_k)/(2A) ,  dN_i/dz = (r_k - r_j)/(2A)  (i,j,k 循环)
+            nel = t.shape[1]
+            rows = np.tile(np.arange(nel), 3)
+            cols = t.reshape(-1)
+            dr = np.concatenate([(z[1] - z[2]) / A2, (z[2] - z[0]) / A2, (z[0] - z[1]) / A2])
+            dz = np.concatenate([(r[2] - r[1]) / A2, (r[0] - r[2]) / A2, (r[1] - r[0]) / A2])
+            n = p.shape[1]
+            self._Gr = sp.csr_matrix((dr, (rows, cols)), shape=(nel, n))
+            self._Gz = sp.csr_matrix((dz, (rows, cols)), shape=(nel, n))
+            self._Av = sp.csr_matrix((np.full(3 * nel, 1 / 3), (rows, cols)), shape=(nel, n))
+            self._rc = r.mean(axis=0)
+        return self._Gr, self._Gz, self._Av, self._rc
+
+    def _B1(self, x):
+        """单元磁感应强度幅值 |B| (T，每 1 A 峰值电流)。B_z = A/r + dA/dr,  B_r = -dA/dz"""
+        Gr, Gz, Av, rc = self._grad_ops()
+        Bz = Av @ x / rc + Gr @ x
+        Br = -(Gz @ x)
+        return np.sqrt(np.abs(Bz) ** 2 + np.abs(Br) ** 2)
 
     def _el_area_r(self):
         if not hasattr(self, "_ar"):
@@ -382,6 +502,7 @@ class InductionQuenchSim:
         Tm = self.T_end_heat
         inzone = p[1] >= g.L - g.zone
         Pc = self.coil_loss_estimate(self.I_end)
+        Pcn = self.conc_loss_W
         res = dict(
             freq_kHz=self.f / 1e3,
             power_kW=self.P / 1e3,
@@ -394,7 +515,10 @@ class InductionQuenchSim:
             T_zone_min=float(Tm[inzone].min()),
             coil_current_A=float(self.I_end / np.sqrt(2)),  # 有效值
             coil_loss_kW=float(Pc / 1e3),
-            efficiency=float(self.P / (self.P + Pc)),
+            efficiency=float(self.P / (self.P + Pc + Pcn)),
+            conc_loss_kW=float(Pcn / 1e3),
+            nonlinear=bool(self.nonlinear),
+            conc=(self.conc.mat.name if self.conc is not None else None),
             case_depth_mm=float(case),
             through_hardened=bool(case >= g.wall - 0.05),
             HRC_surface=float(H[-1]),
@@ -413,6 +537,13 @@ class InductionQuenchSim:
             warn.append(f"淬火区有部位只到 {res['T_zone_min']:.0f}°C，未完全奥氏体化")
         if res["efficiency"] < 0.6:
             warn.append(f"电效率低 ({res['efficiency']*100:.0f}%)，频率与壁厚不匹配")
+        if self.conc is not None and self.conc_loss_W > 0:
+            vol = float(np.sum(self.conc_el * self._el_area_r() * 2 * np.pi))
+            pv = self.conc_loss_W / vol           # 平均损耗密度 W/m3
+            res["conc_dTdt"] = pv / 3.5e6         # 绝热升温速率 K/s (ρcp≈3.5e6 J/m3K)
+            if res["conc_dTdt"] > 20:
+                warn.append(f"导磁体({self.conc.mat.name})自身发热 {self.conc_loss_W/1e3:.2f} kW，"
+                            f"绝热升温约 {res['conc_dTdt']:.0f} K/s，必须水冷或会过热")
         res["warnings"] = warn
         return res
 

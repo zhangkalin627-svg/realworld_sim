@@ -167,3 +167,6 @@ from rw.machine import selftest as _mach_st
 _mach_st.run()
 
 
+# 11) v0.9 电磁升级（非线性B-H/导磁体/三维涡流，见 validate_em.py）
+import validate_em; validate_em.run()
+
