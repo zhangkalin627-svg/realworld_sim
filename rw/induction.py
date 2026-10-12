@@ -159,7 +159,7 @@ def _h_lin(v, w):
 class InductionQuenchSim:
     def __init__(self, geom=None, freq=30e3, power_kw=9.0, t_heat=3.0, t_delay=0.0,
                  medium="water_spray", t_quench=3.0, t_air=6.0, inner_quench=0.0,
-                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False, accel=False,
+                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, dT_em=25.0, verbose=False, accel=False,
                  nonlinear=False, bh=None, conc=None):
         self.g = geom or BottleNeckGeometry()
         self.f = freq
@@ -173,6 +173,9 @@ class InductionQuenchSim:
         # v0.26 加速模式：隐式格式无条件稳定，慢阶段放大步长。倍数 (heat, delay, quench, air)
         self.dt_mult = {"heat": 1, "delay": 2, "quench": 1, "air": 10} if accel else {"heat": 1, "delay": 1, "quench": 1, "air": 1}
         self.em_every = em_every
+        # v0.27 事件触发 EM 重解：距上次求解的温度变化超过 dT_em(K) 立即重解（em_every 变成最长间隔）。
+        # 穿越居里区(650-850°C, μ 塌缩)时非线性模式自动收紧到 10K。
+        self.dT_em = float(dT_em)
         self.verbose = verbose
         self.nonlinear = nonlinear          # True: 45 钢用非线性 B-H(含居里点)，False: 旧的线性有效 μr(T)
         from .em.bh import STEEL45_BH
@@ -443,6 +446,7 @@ class InductionQuenchSim:
         t_end = self.t_heat + self.t_delay + self.t_quench + self.t_air
         q, I = self.solve_em(T)
         t_lastem = 0.0
+        T_em = T.copy()                    # 上次 EM 求解时的温度场（事件触发基准）
         self.T_end_heat = None
         self.A_end_heat = None
         self.I_end = None
@@ -458,6 +462,7 @@ class InductionQuenchSim:
             t = float(resume["t"])
             I = float(resume["I"])
             t_lastem = -1e18          # 强制下一步重解电磁（q 与当前 T 一致）
+            T_em = None
             q = None
             self.I_hist = [float(x) for x in resume["I_hist"]]
             te = resume.get("T_end_heat")
@@ -471,9 +476,14 @@ class InductionQuenchSim:
         while t < t_end - 1e-12:
             if t < self.t_heat - 1e-9:
                 phase = "heat"
-                if t - t_lastem >= self.em_every - 1e-9:
+                tol = self.dT_em
+                if self.nonlinear and np.any((T > 650) & (T < 850)):
+                    tol = min(tol, 10.0)   # 居里区 μ 塌缩快，非线性模式收紧
+                dT_since = np.inf if T_em is None else float(np.max(np.abs(T - T_em)))
+                if t - t_lastem >= self.em_every - 1e-9 or dT_since >= tol:
                     q, I = self.solve_em(T)
                     t_lastem = t
+                    T_em = T.copy()
                     self.I_hist.append(I)
                 dts = min(self.dt * self.dt_mult["heat"], self.t_heat - t)  # 不越过加热结束边界
                 Tn = self._thermal_step(T, q, phase, dts)
