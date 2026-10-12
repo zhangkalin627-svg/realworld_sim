@@ -184,7 +184,8 @@ class InductionQuenchSim:
         self.conc = conc                    # rw.em.conc.Concentrator 或 None
         self._mur_state = None
         self.conc_loss_W = 0.0
-        self.em_tol = 0.012
+        # v0.27.2 默认放宽到 0.048（4x）：缪斯 6 工况包线验证（5k-100kHz × 3-9kW）精度零代价、省时 15-39%
+        self.em_tol = 0.048
         if nonlinear or conc is not None:
             self.em_every = max(em_every, 0.1)   # 温度变化慢，非线性迭代贵
         if accel:
