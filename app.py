@@ -5,12 +5,14 @@ import sys, warnings, traceback
 warnings.filterwarnings("ignore")
 import matplotlib
 matplotlib.use("QtAgg")
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from rw.induction import InductionQuenchSim, BottleNeckGeometry, find_power
 from rw import materials as M, viz
+from rw.version import VERSION
+from rw import theme
 
 MEDIA = [(k, M.QUENCHANTS[k]["name"]) for k in ("water_spray", "polymer_spray", "water_dip", "oil_dip", "air")]
 
@@ -115,8 +117,10 @@ class InductionPage(QtWidgets.QWidget):
         self.bar = QtWidgets.QProgressBar(); left.addWidget(self.bar)
         self.status = QtWidgets.QLabel("就绪"); self.status.setWordWrap(True); left.addWidget(self.status)
         self.out = QtWidgets.QTextEdit(); self.out.setReadOnly(True); left.addWidget(self.out, 1)
-        lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setFixedWidth(330)
-        lay.addWidget(lw)
+        lw = QtWidgets.QWidget(); lw.setLayout(left)
+        sa = QtWidgets.QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(lw)
+        sa.setFixedWidth(352); sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)   # 小窗口(如 1280×800)左侧栏可滚动，按钮/结果一定够得着
+        lay.addWidget(sa)
 
         # ---------------- 右侧图
         self.tabs = QtWidgets.QTabWidget()
@@ -199,7 +203,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.9")
+        self.setWindowTitle(f"真实的世界 v{VERSION}")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -251,10 +255,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.flow = FlowPage()
         self.top.addTab(self.flow, "⑩ 流体")
         self.setCentralWidget(self.top)
+        # 主题：浅色/深色/跟随系统，记住上次选择（v0.17）
+        mbar = self.menuBar(); mth = mbar.addMenu("主题")
+        grp = QtGui.QActionGroup(self); grp.setExclusive(True)
+        cur = theme.current()
+        for key, lab in (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")):
+            a = mth.addAction(lab); a.setCheckable(True); a.setChecked(cur == key)
+            a.triggered.connect(lambda _=False, k=key: theme.apply(QtWidgets.QApplication.instance(), k))
+            grp.addAction(a)
 
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    theme.apply(app, theme.current())     # 先应用主题（rcParams 就绪），页面建图即吃到
     w = MainWindow()
     w.show()
     if "--screenshot" in sys.argv:  # 自测：python3 app.py --screenshot out.png [induction|struct|plc]
@@ -309,10 +322,10 @@ def main():
                     pg.tabs.setCurrentIndex(1)
             QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
         elif which == "struct":
-            w.top.setCurrentIndex(1)
+            w.top.setCurrentWidget(w.st_tabs); w.st_tabs.setCurrentIndex(0)
             QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("world"):
-            w.top.setCurrentIndex(3)
+            w.top.setCurrentWidget(w.world)
             sub = int(which[-1]) if which[-1].isdigit() else 0
             w.world.tabs.setCurrentIndex(sub)
             if sub == 0:
@@ -400,12 +413,12 @@ def main():
             poll.start(300)
             QtCore.QTimer.singleShot(90000, lambda: (w.grab().save(out), app.quit()))
         elif which == "plcdemo":
-            w.top.setCurrentIndex(2); w.plc_tabs.setCurrentWidget(w.plc_demo)
+            w.top.setCurrentWidget(w.plc_tabs); w.plc_tabs.setCurrentWidget(w.plc_demo)
             w.plc_demo.load(); w.plc_demo.spd.setCurrentIndex(2)
             QtCore.QTimer.singleShot(800, lambda: w.plc_demo.sim.press("X000"))
             QtCore.QTimer.singleShot(5200, lambda: (w.grab().save(out), app.quit()))
         elif which == "structdemo":
-            w.top.setCurrentIndex(1); w.st_tabs.setCurrentIndex(w.st_tabs.count() - 1)
+            w.top.setCurrentWidget(w.st_tabs); w.st_tabs.setCurrentIndex(w.st_tabs.count() - 1)
             QtCore.QTimer.singleShot(1000, lambda: (w.grab().save(out), app.quit()))
         else:
             m = w.ind

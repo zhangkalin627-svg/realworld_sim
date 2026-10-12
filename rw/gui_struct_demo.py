@@ -47,19 +47,33 @@ class StructDemoPage(QtWidgets.QWidget):
         add("P", "台面集中载荷 kg", spin(0, 20000, 300, 50, 0))
         add("x", "载荷位置 X mm", spin(0, 6000, 500, 50, 0)); add("y", "载荷位置 Y mm", spin(0, 6000, 400, 50, 0))
         self.out = QtWidgets.QTextBrowser(); left.addWidget(self.out, 1)
-        lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setFixedWidth(400); lay.addWidget(lw)
+        lw = QtWidgets.QWidget(); lw.setLayout(left)
+        sa = QtWidgets.QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(lw)
+        sa.setFixedWidth(420); sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        lay.addWidget(sa)
         self.fig = Figure(figsize=(8, 6)); self.cv = FigureCanvasQTAgg(self.fig); lay.addWidget(self.cv, 1)
         self.update_()
 
     def update_(self, *a):
         v = {k: (w.currentData() if isinstance(w, QtWidgets.QComboBox) else w.value()) for k, w in self.w.items()}
-        f, sec = build_table(v["L"], v["W"], v["H"], v["t"], v["ml"], v["mt"], v["P"], v["x"], v["y"])
+        # 载荷坐标校验（测试反馈）：超出台面时"吸附最近节点"会给出看似合格但没意义的结果——夹回台面并明确警告
+        L, W = v["L"], v["W"]
+        x, y = v["x"], v["y"]
+        self._load_warn = ""
+        if not (0 <= x <= L and 0 <= y <= W):
+            x2, y2 = min(max(x, 0.0), L), min(max(y, 0.0), W)
+            self._load_warn = (f"⚠ 载荷位置 ({x:.0f}, {y:.0f}) 超出机架台面 {L:.0f}×{W:.0f} mm，"
+                               f"已按 ({x2:.0f}, {y2:.0f}) 计算。越界坐标的结果没有物理意义，请修正坐标。")
+            x, y = x2, y2
+        f, sec = build_table(L, W, v["H"], v["t"], v["ml"], v["mt"], v["P"], x, y)
         f.solve()
+        warn_html = (f'<p style="color:#b26a00;background:#fff4e5;padding:6px;border-left:3px solid #f0a030">{self._load_warn}</p>'
+                     if self._load_warn else "")
         U = f.u[:, :3]; P = np.array(f.nodes)
         dmax = float(np.abs(U).max()); smax = max(e["sigma"] for e in f.elems)
         res = []
         if f.singular or dmax > 1e4:
-            self.out.setHtml(html([("FAIL", "结构是个机构（有杆件没连上/约束不够），会垮，算不出稳定变形")])); return
+            self.out.setHtml(warn_html + html([("FAIL", "结构是个机构（有杆件没连上/约束不够），会垮，算不出稳定变形")])); return
         legs = [e for e in f.elems if e["name"] == "立柱"]
         Nmax = max(-e["N"] for e in legs) if legs else 0
         m = MAT[v["ml"]]
@@ -72,7 +86,7 @@ class StructDemoPage(QtWidgets.QWidget):
         feet = [f.reactions[n][2] / 9.81 for n in f.fix]
         res.append(("OK" if min(feet) > 0 else "FAIL", f"地脚受力 {min(feet):.0f}~{max(feet):.0f} kg" + ("（有地脚受拉 = 会翘起/倾倒）" if min(feet) <= 0 else "")))
         mass = sum(e["rho"] * e["sec"].A * e["L"] for e in f.elems)
-        self.out.setHtml(f"<b>机架自重约 {mass:.1f} kg，型材 {sec.name}</b><br><br>" + html(res))
+        self.out.setHtml(warn_html + f"<b>机架自重约 {mass:.1f} kg，型材 {sec.name}</b><br><br>" + html(res))
         fig = self.fig; fig.clear(); ax = fig.add_subplot(111, projection="3d")
         sc = 0.08 * span / max(dmax, 1e-9)
         cm = __import__("matplotlib").pyplot.get_cmap("turbo")
