@@ -162,6 +162,26 @@ def run():
           f"{[x['status'] for x in seg]}；钢块下落 { -blk['dz_mm']:.0f} mm（断后不再被托住）")
     assert any(x["status"] != "稳定" for x in seg) and blk["dz_mm"] < -50
     print("[12] 三维装配世界 全部通过")
+    matdb_edge()
+
+
+def matdb_edge():
+    """[7z] matdb mix() 边界回归（issue 20261012-1928）。"""
+    from rw.matdb import mixing as MX
+    for el in ("O", "H", "N", "Rn"):                       # 单一气态元素不崩
+        r = MX.mix({el: 50}); MX.report(r); assert r["density"] > 0
+    for bad in ({}, {"Fe": 0}, {"Fe": -10, "Cu": 50}):     # 空/全零/负含量 → ValueError
+        try:
+            MX.mix(bad); assert False, bad
+        except ValueError:
+            pass
+    w = MX.mix({"Fe": 50, "铁": 50, "Cu": 100})["wt"]      # 符号+中文名合并
+    assert abs(w["Fe"] - 50) < 1e-9 and abs(w["Cu"] - 50) < 1e-9, w
+    for ag in (1.99, 2.0):                                 # Fe-Ag 少量也不能说可熔炼
+        r = MX.mix({"Fe": 100 - ag, "Ag": ag})
+        assert "不互溶" in r["verdict_zh"] and r["warnings"], (ag, r["verdict_zh"])
+    assert "可以熔炼" in MX.mix({"Fe": 98, "Cu": 1.5})["verdict_zh"]
+    print("[7z] matdb mix 边界（单气体元素/空配比/负值/中英名合并/Fe-Ag 少量）通过")
 
 
 if __name__ == "__main__":
