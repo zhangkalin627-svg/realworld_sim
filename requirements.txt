@@ -6,3 +6,4 @@ PySide6-Essentials>=6.6
 trimesh
 networkx
 rtree
+mujoco>=3.1

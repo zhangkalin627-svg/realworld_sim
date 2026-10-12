@@ -170,3 +170,6 @@ _mach_st.run()
 # 11) v0.9 电磁升级（非线性B-H/导磁体/三维涡流，见 validate_em.py）
 import validate_em; validate_em.run()
 
+# 12) v0.10 三维装配世界（MuJoCo 刚体 + 梁体检，见 validate_w3d.py）
+import validate_w3d; validate_w3d.run()
+

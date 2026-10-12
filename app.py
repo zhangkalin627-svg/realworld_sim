@@ -244,6 +244,9 @@ class MainWindow(QtWidgets.QMainWindow):
         from rw.gui_machine import MachinePage
         self.machine = MachinePage()
         self.top.addTab(self.machine, "⑧ 整机联动")
+        from rw.gui_world3d import World3DPage
+        self.w3d = World3DPage()
+        self.top.addTab(self.w3d, "⑨ 三维装配世界")
         self.setCentralWidget(self.top)
 
 
@@ -282,6 +285,19 @@ def main():
                     poll.start(500)
                 else:
                     QtCore.QTimer.singleShot(1500, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("w3d"):
+            # w3d0 钢板桥(仿真后) w3d1 叠积木倒塌(中途帧) w3d2 水里浮沉
+            sub = int(which[3:]) if which[3:].isdigit() else 0
+            w.top.setCurrentWidget(w.w3d)
+            pg = w.w3d
+            pg.preset.setCurrentIndex({0: 0, 1: 2, 2: 6, 3: 3, 4: 5}[sub]); pg.load_preset(pg.preset.currentIndex())
+            if sub != 2:
+                pg.run()
+                if sub in (1, 3):
+                    pg.slider.setValue(int(pg.slider.maximum() * 0.45))
+                if sub == 4:
+                    pg.tabs.setCurrentIndex(1)
+            QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
         elif which == "struct":
             w.top.setCurrentIndex(1)
             QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
