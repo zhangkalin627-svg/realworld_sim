@@ -56,6 +56,12 @@ class ThermalTable:
         """加热进行到 t_heat 秒时测温点（淬火区中部外表面）温度。"""
         return float(np.interp(t_heat, self.ct, self.cT, left=25.0))
 
+    def T_exit(self, t_heat, t_quench):
+        """淬火结束时表面温度(°C)，表里的 T_after 双线性插值。"""
+        from scipy.interpolate import RegularGridInterpolator
+        G = np.array([[self._get(th, tq)["T_after"] for tq in self.Q] for th in self.H])
+        return float(RegularGridInterpolator((self.H, self.Q), G)((float(np.clip(t_heat, self.H[0], self.H[-1])), float(np.clip(t_quench, self.Q[0], self.Q[-1])))))
+
     def result(self, t_heat, t_quench):
         from scipy.interpolate import RegularGridInterpolator
         th = float(np.clip(t_heat, self.H[0], self.H[-1]))
