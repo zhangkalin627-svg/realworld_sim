@@ -187,7 +187,15 @@ def _range(vals):
 
 def mix(comp_wt, minor=2.0):
     """comp_wt: {'Fe':70,'Ag':30} 质量百分比（自动归一化）。返回结果字典。"""
-    w = norm_comp({get(k)["sym"]: v for k, v in comp_wt.items()})
+    raw = {}
+    for k, v in comp_wt.items():          # 符号/中文名先规范化为元素符号再累加
+        raw[get(k)["sym"]] = raw.get(get(k)["sym"], 0.0) + v
+    neg = [e for e, v in raw.items() if v < 0]
+    if neg:
+        raise ValueError("含量不能为负：" + "、".join(f"{e}={raw[e]}" for e in neg))
+    if not any(v > 0 for v in raw.values()):
+        raise ValueError("配比为空（没有大于 0 的组元）")
+    w = norm_comp(raw)
     x = wt_to_at(w)
     els = list(w)
     res = dict(wt=w, at=x, pairs=[], warnings=[])
@@ -206,6 +214,16 @@ def mix(comp_wt, minor=2.0):
     res["verdict_zh"] = KIND_ZH[worst]
     if len(major) == 1 and len(els) > 1:
         res["verdict_zh"] = f"以{EL[major[0]]['zh']}为基体，少量元素溶入（稀合金，可以熔炼）"
+    # ---- 少量元素与基体液态不互溶（Fe-Ag 等）：不能说“可以熔炼”
+    if len(major) == 1 and len(els) > 1:
+        for e in els:
+            if e != major[0] and w[e] >= 0.1:
+                k2, t2, _ = binary(major[0], e)
+                if k2 == "liq_gap":
+                    res["verdict_zh"] = f"{EL[major[0]]['zh']}基体中的{EL[e]['zh']}液态不互溶，会偏析/分层，不是均匀合金"
+                    res["warnings"].append(f"{EL[e]['zh']}({w[e]:.2f} wt%) 与{EL[major[0]]['zh']}液态不互溶、固溶度近零：熔炼会偏析分层")
+    if len(els) == 1:
+        res["warnings"].append("只有一种元素：这是纯元素，不是合金")
     if worst in ("compound", "inert", "na"):
         res["strength"] = dict(src="无", Rm_range=None, note="不是合金，不估算力学性能")
         res["grade"] = None
@@ -241,6 +259,8 @@ def mix(comp_wt, minor=2.0):
     vf = {}
     if "density" in res:
         vv = {e: (0 if EL[e]["density_src"] == "gas_25C" else w[e] / EL[e]["density"]) for e in els}
+        if sum(vv.values()) <= 0:      # 全是气体元素：按气体密度算体积分数
+            vv = {e: w[e] / EL[e]["density"] for e in els}
         vf = {e: vv[e] / sum(vv.values()) for e in els}
         Es = {e: EL[e]["E"] for e in major}
         if all(Es.values()):
