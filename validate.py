@@ -80,6 +80,16 @@ for k in ("Constantan", "H62", "H68", "Monel400", "Cr20Ni80", "QSn6.5-0.1", "Inv
     r = mix(GRADES[k]["comp"]); lo, hi = r["resist_range"]; inr.append(lo <= GRADES[k]["resist"] <= hi)
 print("固溶体电阻率：实测落在估算范围内 %d/%d 个牌号" % (sum(inr), len(inr)))
 # 8) 电路仿真（ngspice）+ 虚拟示波器：和解析解对比
+# 8h) v0.27.1 构造器兼容回归：旧位置参数调用语义不变（卡布审查发现 dT_em 插入中间导致错位）
+from inspect import signature as _sig
+_args = [None, 30e3, 9.0, 3.0, 0.0, "water_spray", 3.0, 6.0, 0.0, 20.0, 25.0, 0.01, 0.05, False, False, True]
+_b = _sig(InductionQuenchSim).bind(*_args); _b.apply_defaults()
+assert _b.arguments["verbose"] is False and _b.arguments["accel"] is False and _b.arguments["nonlinear"] is True, _b.arguments
+assert _b.arguments["dT_em"] == 25.0
+from inspect import Parameter as _P
+assert _sig(InductionQuenchSim).parameters["dT_em"].kind is _P.KEYWORD_ONLY, "dT_em 应仅限关键字"
+print("构造器位置参数兼容 OK：旧调用语义不变，dT_em 仅限关键字（默认 25K）")
+
 from rw.circuit.spice import find_ngspice, ngspice_version
 if not find_ngspice():
     print("电路仿真：没找到 ngspice，跳过（Ubuntu: sudo apt install ngspice）")
