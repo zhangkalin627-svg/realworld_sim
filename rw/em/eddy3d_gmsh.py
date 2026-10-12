@@ -119,3 +119,61 @@ class BilletInCoil3D(TubeInCoil3D):
 
     def solve(self):
         return super().solve(permc="COLAMD")     # 非结构网格：COLAMD 排序防 LU fill-in（NATURAL 会内存爆炸）
+
+def _el_vol(p):
+    """每个四面体体积 (m³，网格为 SI)。"""
+    t, pts = p.mesh.t, p.mesh.p
+    cr = np.cross((pts[:, t[1]] - pts[:, t[0]]).T, (pts[:, t[2]] - pts[:, t[0]]).T)
+    return np.abs(np.sum(cr * (pts[:, t[3]] - pts[:, t[0]]).T, axis=1)) / 6.0
+
+
+def _billet_stats(p, a):
+    """方坯结果统计: 总功率、表层/心部集肤比、角部/面心比、左右对称度、空气假损耗 (线圈窗口 z 内)。"""
+    vol = _el_vol(p); m = p.tube
+    x, y, z = (p.cen[i][m] * 1000 for i in range(3))      # m → mm
+    pq, vv = p.pq[m], vol[m]
+    zw = (z >= p.coil_z[0]) & (z <= p.coil_z[1])
+    xc = x - p.ecc_mm                                     # 相对坯料中心
+    a2 = a / 2
+    depth = a2 - np.maximum(np.abs(xc), np.abs(y))
+    sf, co = zw & (depth < 1.5), zw & (depth > 4.5)
+    skin = float((pq[sf].sum() / vv[sf].sum()) / (pq[co].sum() / vv[co].sum()))
+    mn = np.minimum(np.abs(xc), np.abs(y))
+    cor, fac = sf & (mn > 0.6 * a2), sf & (mn < 0.3 * a2)
+    corner = float((pq[cor].sum() / vv[cor].sum()) / (pq[fac].sum() / vv[fac].sum()))
+    sym = float(pq[zw & (y > 0)].sum() / max(pq[zw & (y < 0)].sum(), 1e-30))
+    return dict(P=p.P_tube, P_air=p.P_air_reg, tets=int(p.mesh.t.shape[1]), ecc_mm=float(p.ecc_mm),
+                skin=skin, corner=corner, sym=sym)
+
+
+def _billet_map(p, a, nmax=4000):
+    """线圈窗口内工件单元的功率密度 (x,y mm + W/m³)，供 GUI 画截面热图；子采样到 nmax 点。"""
+    vol = _el_vol(p)
+    z = p.cen[2] * 1000
+    idx = np.where(p.tube & (z >= p.coil_z[0]) & (z <= p.coil_z[1]))[0]
+    den, x, y = p.pq[idx] / vol[idx], p.cen[0][idx] * 1000, p.cen[1][idx] * 1000
+    if len(idx) > nmax:
+        sel = np.linspace(0, len(idx) - 1, nmax).astype(int)
+        x, y, den = x[sel], y[sel], den[sel]
+    return dict(x=list(map(float, x)), y=list(map(float, y)), d=list(map(float, den)), a=a)
+
+
+def study_billet(a=20.0, ecc_mm=3.0, with_map=True, **kw):
+    """方坯标准算例: 同心 + 偏心各一发粗网格 (约 15 s/例，2 GB 内存可跑)。返回可 JSON 化的统计与截面热图数据。"""
+    import gc
+    out = {}
+    p0 = BilletInCoil3D(a=a, ecc_mm=0.0, **kw).build().solve()
+    out["ecc0"] = _billet_stats(p0, a)
+    if with_map:
+        out["ecc0"]["map"] = _billet_map(p0, a)
+    del p0; gc.collect()
+    if ecc_mm > 0:
+        p1 = BilletInCoil3D(a=a, ecc_mm=ecc_mm, **kw).build().solve()
+        out["ecc"] = _billet_stats(p1, a)
+        if with_map:
+            out["ecc"]["map"] = _billet_map(p1, a)
+        del p1; gc.collect()
+    else:
+        out["ecc"] = out["ecc0"]
+    return out
+

@@ -87,3 +87,25 @@ def plot_3d(fig, res):
     a2.set_ylabel("工件吸收功率 (kW, 1 kA 安匝)")
     a2.set_title(f"同心时 3D 对 2D 差 {100*(e0['P_3d']/e0['P_2d']-1):+.1f}%  (网格 {e0['tets']//1000}k 四面体)")
     fig.tight_layout()
+
+def plot_billet(fig, res):
+    """方坯(非圆截面, gmsh)结果: 线圈高度内截面功率密度热图, 同心 vs 偏心"""
+    from matplotlib.colors import LogNorm
+    fig.clear()
+    e0, e1 = res["ecc0"], res["ecc"]
+    dmax = max(max(e0["map"]["d"]), max(e1["map"]["d"]))
+    dmin = dmax / 1e4
+    a2 = e0["map"]["a"] / 2
+    for ax, e, ttl in ((121, e0, "同心"), (122, e1, f"偏心 {e1['ecc_mm']:g} mm (向 +x)")):
+        a = fig.add_subplot(ax)
+        sc = a.scatter(e["map"]["x"], e["map"]["y"], c=np.maximum(e["map"]["d"], dmin), s=6,
+                       cmap="inferno", norm=LogNorm(dmin, dmax))
+        r = Rectangle((e["ecc_mm"] - a2, -a2), 2 * a2, 2 * a2, fill=False, color="#1f77b4", lw=1.2)
+        a.add_patch(r)
+        a.set_aspect("equal"); a.set_xlim(-a2 * 2.2, a2 * 2.2); a.set_ylim(-a2 * 2.2, a2 * 2.2)
+        a.set_xlabel("x (mm)"); a.set_ylabel("y (mm)")
+        a.set_title(f"{ttl}: {e['P']/1e3:.3f} kW", fontsize=10)
+        fig.colorbar(sc, ax=a, label="功率密度 (W/m³)")
+    fig.suptitle("方坯截面功率密度 (线圈高度内, gmsh 非结构网格)")
+    fig.tight_layout()
+
