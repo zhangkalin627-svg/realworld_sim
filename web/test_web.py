@@ -63,4 +63,22 @@ assert len(r["plots"]) == 2 and all("<svg" in p["svg"] for p in r["plots"]), "�
 j2 = run_wait("plc", {"t_sim": 20, "scenario": "estop", "estop_at": 6.0})
 assert j2["status"] == "done" and any("急停" in l for l in j2["result"]["lines"]), "急停剧本未生效"
 print(f"[web-f] PLC 虚拟调试端到端 OK ({time.time()-t0:.0f}s): 30 s 完成 {r['raw']['done']} 件, 加热 {r['raw']['heat_s']:.2f}s/淬火 {r['raw']['quench_s']:.2f}s, 急停剧本 OK")
+t0 = time.time()
+import math as _m
+j = run_wait("flow_net", {})
+assert j["status"] == "done", j.get("error", "?")
+r = j["result"]["raw"]
+assert abs(r["Q_A_Lmin"] - r["Q_B_Lmin"]) < 0.2, "阀全开时 A/B 两路应对称"
+assert 30 < r["Q_pump_Lmin"] < 60 and r["v_jet"] > 10, f"流量/射速不合理: {r}"
+j = run_wait("flow_hammer", {})
+r = j["result"]["raw"]
+assert j["status"] == "done", j.get("error", "?")
+assert 15 < r["p_max_bar"] < 25, f"水锤峰值应在阀前 3 bar 基础上显著升高: {r}"
+assert r["tL_ms"] < 25, "默认关阀 25 ms 应慢于 2L/a"
+j = run_wait("flow_jet", {})
+r = j["result"]["raw"]
+assert j["status"] == "done", j.get("error", "?")
+assert abs(r["v0"] - _m.sqrt(2 * 9.81 * 1.0)) / _m.sqrt(2 * 9.81 * 1.0) < 0.02, "射流初速应对照 Torricelli √(2gH)"
+assert r["t_drain_min"] > 10, "放空时间不合理"
+print(f"[web-g] 流体三算例端到端 OK ({time.time()-t0:.0f}s): 管网/水锤/放空射流全部对照通过")
 print("web 冒烟测试全部通过")

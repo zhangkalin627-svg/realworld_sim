@@ -109,6 +109,26 @@ def _plc(params, progress):
     return run_plc(params, progress)
 
 
+def _flow_net(params, progress):
+    from .flowsim import run_flow_net
+    return run_flow_net(params, progress)
+
+
+def _flow_hammer(params, progress):
+    from .flowsim import run_flow_hammer
+    return run_flow_hammer(params, progress)
+
+
+def _flow_jet(params, progress):
+    from .flowsim import run_flow_jet
+    return run_flow_jet(params, progress)
+
+
+def _fluid_options(keys):
+    from rw.world.fluids import FLUIDS
+    return [{"v": k, "t": FLUIDS[k]["name"]} for k in keys]
+
+
 def _plc_default_program():
     from rw.plc.demo import DEMO_IL
     return DEMO_IL
@@ -159,4 +179,40 @@ MODULES = [
          {"name": "t_sim", "label": "运行时长 s", "type": "number", "default": 60, "min": 5, "max": 180, "step": 5},
      ],
      "run": _plc},
+    {"key": "flow_net", "name": "流体·管网", "desc": "两工位并联喷淋管网：泵/阀/过滤器/软管/喷淋孔 → 流量分配、压力沿程、泵工作点、汽蚀/超速体检",
+     "fields": [
+         {"name": "fluid", "label": "介质", "type": "select", "default": "pag10", "options": _fluid_options(("pag10", "water", "oil_quench"))},
+         {"name": "T", "label": "液温 °C", "type": "number", "default": 30, "min": 5, "max": 90, "step": 5},
+         {"name": "speed", "label": "泵转速 % 额定", "type": "number", "default": 100, "min": 30, "max": 120, "step": 5},
+         {"name": "dirty", "label": "吸入过滤器脏污 ×（1=干净）", "type": "number", "default": 1, "min": 0.5, "max": 40, "step": 1},
+         {"name": "openB", "label": "B 路电磁阀开度 %", "type": "number", "default": 100, "min": 0, "max": 100, "step": 10},
+         {"name": "holes", "label": "每路喷淋孔数", "type": "number", "default": 24, "min": 4, "max": 100, "step": 2},
+         {"name": "dh", "label": "孔径 mm", "type": "number", "default": 1.2, "min": 0.5, "max": 4, "step": 0.1},
+         {"name": "hose", "label": "软管内径 mm", "type": "number", "default": 10, "min": 5, "max": 20, "step": 1},
+     ],
+     "run": _flow_net},
+    {"key": "flow_hammer", "name": "流体·水锤", "desc": "关阀冲击（特征线法）：最高/最低压力 vs 管材额定，汽穴判据，关阀时间影响",
+     "fields": [
+         {"name": "mat", "label": "管材", "type": "select", "default": "钢",
+          "options": ["不锈钢", "钢", "铜", "PVC", "PE", "增强软管", "橡胶软管"]},
+         {"name": "L", "label": "管长 m（阀到上游稳压点）", "type": "number", "default": 3, "min": 0.2, "max": 2000, "step": 1},
+         {"name": "D", "label": "内径 mm", "type": "number", "default": 26, "min": 3, "max": 500, "step": 1},
+         {"name": "e", "label": "壁厚 mm", "type": "number", "default": 2.0, "min": 0.2, "max": 30, "step": 0.5},
+         {"name": "H", "label": "阀前稳压 bar（表压）", "type": "number", "default": 3.0, "min": 0.1, "max": 40, "step": 0.5},
+         {"name": "K", "label": "阀全开阻力系数 K", "type": "number", "default": 20, "min": 0.5, "max": 5000, "step": 5},
+         {"name": "tc", "label": "关阀时间 ms", "type": "number", "default": 25, "min": 1, "max": 20000, "step": 5},
+         {"name": "rate", "label": "管/软管额定压力 bar", "type": "number", "default": 10, "min": 1, "max": 400, "step": 1},
+     ],
+     "run": _flow_hammer},
+    {"key": "flow_jet", "name": "流体·放空与射流", "desc": "水箱底部开孔：放空时间（对照 Torricelli 解析）、射流轨迹/射程/冲击力",
+     "fields": [
+         {"name": "fluid", "label": "液体", "type": "select", "default": "water",
+          "options": _fluid_options(("water", "pag10", "oil_quench", "gasoline", "glycerin", "mercury"))},
+         {"name": "A", "label": "水箱截面积 m²", "type": "number", "default": 0.5, "min": 0.01, "max": 100, "step": 0.1},
+         {"name": "H0", "label": "初始液位 m", "type": "number", "default": 1.0, "min": 0.05, "max": 30, "step": 0.1},
+         {"name": "d", "label": "孔径 mm", "type": "number", "default": 12, "min": 1, "max": 100, "step": 1},
+         {"name": "zh", "label": "孔离地高度 m", "type": "number", "default": 1.0, "min": 0, "max": 20, "step": 0.1},
+         {"name": "ang", "label": "孔朝向 仰角 °", "type": "number", "default": 0, "min": -60, "max": 80, "step": 5},
+     ],
+     "run": _flow_jet},
 ]
