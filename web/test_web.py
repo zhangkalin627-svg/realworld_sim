@@ -144,4 +144,18 @@ assert "Traceback" not in j["error"] and "/home" not in j["error"] and "web/" no
 j = run_wait("plc", {"program": "LD X000\nOUT Y000"})
 assert j["status"] == "error" and "END" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
 print(f"[web-j] 两封反馈修复回归 OK ({time.time()-t0:.0f}s): NaN文本/400校验/越界收口/不可达温度快速失败/错误不泄堆栈")
+
+# [web-k] 电路模块：无 ngspice 的服务器必须给友好报错（沙箱即此情形）
+t1 = time.time()
+j = run_wait("circuit", {"example": "rc"}, timeout=30)
+from rw.circuit import spice as _sp
+if _sp.find_ngspice():
+    assert j["status"] == "done", j.get("error", "?")[:200]
+    assert any("Vpp" in l for l in j["result"]["lines"]), j["result"]["lines"]
+    assert any(p["title"] == "波形图" for p in j["result"]["plots"])
+    print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 有 ngspice，RC 算例测量+图齐全")
+else:
+    assert j["status"] == "error" and "ngspice" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
+    print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 无 ngspice → 友好报错（完整算例需有 ngspice 的服务器验证）")
+
 print("web 冒烟测试全部通过")
