@@ -6,14 +6,15 @@ import numpy as np
 import trimesh
 from scipy.spatial.transform import Rotation as R
 from ..matlib import MAT
+from . import profile as _prof
 
 # 补充一些常见的非金属/建材（典型值）。fy 为屈服或抗压强度，Pa
 EXTRA = {
-    "wood":   dict(name="松木(顺纹)",  E=10e9,  nu=0.35, rho=500,  fy=40e6,  Tmax=120, magnetic=False, resist=None, mur=1),
-    "concrete": dict(name="混凝土 C30", E=30e9, nu=0.2, rho=2400, fy=20e6,  Tmax=300, magnetic=False, resist=None, mur=1),
-    "glass":  dict(name="玻璃",        E=70e9,  nu=0.22, rho=2500, fy=40e6,  Tmax=300, magnetic=False, resist=None, mur=1),
-    "rubber": dict(name="橡胶",        E=0.01e9, nu=0.49, rho=1100, fy=15e6, Tmax=80, magnetic=False, resist=None, mur=1),
-    "ice":    dict(name="冰",          E=9e9,   nu=0.33, rho=917,  fy=5e6,   Tmax=0,   magnetic=False, resist=None, mur=1),
+    "wood":   dict(name="松木(顺纹)",  E=10e9,  nu=0.35, rho=500,  fy=40e6, fu=4e+07,  Tmax=120, magnetic=False, resist=None, mur=1),
+    "concrete": dict(name="混凝土 C30", E=30e9, nu=0.2, rho=2400, fy=20e6, fu=3e+07,  Tmax=300, magnetic=False, resist=None, mur=1),
+    "glass":  dict(name="玻璃",        E=70e9,  nu=0.22, rho=2500, fy=40e6, fu=4e+07,  Tmax=300, magnetic=False, resist=None, mur=1),
+    "rubber": dict(name="橡胶",        E=0.01e9, nu=0.49, rho=1100, fy=15e6, fu=1.5e+07, Tmax=80, magnetic=False, resist=None, mur=1),
+    "ice":    dict(name="冰",          E=9e9,   nu=0.33, rho=917,  fy=5e6, fu=2e+06,   Tmax=0,   magnetic=False, resist=None, mur=1),
 }
 MATS = {**MAT, **EXTRA}
 # 滑动摩擦系数（材料对的粗略取值：干燥；这里按"较低者"粗估，标注为估算）
@@ -27,6 +28,9 @@ KINDS = {
     "tube":   dict(zh="圆管",       dims=["外径", "内径", "长"]),
     "sphere": dict(zh="球",         dims=["直径"]),
 }
+# v0.12 型材（局部坐标: 长度沿 X，截面在 Y-Z 平面，H 沿 Z、B 沿 Y）
+for k, v in _prof.PROFILE_KINDS.items():
+    KINDS[k] = dict(zh=v["zh"], dims=v["dims"])
 
 
 class Part:
@@ -53,7 +57,14 @@ class Part:
         if self.kind == "cyl": return np.pi * (d[0] / 2) ** 2 * d[1]
         if self.kind == "tube": return np.pi * ((d[0] / 2) ** 2 - (d[1] / 2) ** 2) * d[2]
         if self.kind == "sphere": return 4 / 3 * np.pi * (d[0] / 2) ** 3
+        if self.kind in _prof.PROFILE_KINDS: return _prof.area_mm2(self.kind, d) * d[-1]
         raise ValueError(self.kind)
+
+    def primitives(self):
+        """物理用分解体：[(kind, dims, offset_mm)]，offset 在零件局部坐标内。非型材 = 自身。"""
+        if self.kind in _prof.PROFILE_KINDS:
+            return [("box", list(d), list(o)) for d, o in _prof.primitives(self.kind, self.dims)]
+        return [(self.kind, list(self.dims), [0.0, 0.0, 0.0])]
 
     @property
     def mass(self):
@@ -61,6 +72,11 @@ class Part:
 
     def local_mesh(self, seg=32):
         d = self.dims
+        if self.kind in _prof.PROFILE_KINDS:
+            ms = []
+            for pd, po in _prof.primitives(self.kind, d):
+                m = trimesh.creation.box(extents=pd); m.apply_translation(po); ms.append(m)
+            return trimesh.util.concatenate(ms)
         if self.kind == "box": return trimesh.creation.box(extents=d)
         if self.kind == "cyl": return trimesh.creation.cylinder(radius=d[0] / 2, height=d[1], sections=seg)
         if self.kind == "tube": return trimesh.creation.annulus(r_min=d[1] / 2, r_max=d[0] / 2, height=d[2], sections=seg)
@@ -82,6 +98,14 @@ class Scene:
         self.parts = []
         self.fluid = None      # (key 或 密度, 液面高度 mm)
         self.floor_mat = "concrete"
+        self.joints = []       # v0.12 螺栓连接校核: dict(base, part, side=[..], size, grade, coords, center, normal)
+        self.hinges = []       # v0.12 轴承/铰链: dict(part, anchor=[x,y,z] mm, axis=[..] 局部轴, bearing="6204", damp=0, spin_rpm=0)
+
+    def add_joint(self, **kw):
+        self.joints.append(kw); return kw
+
+    def add_hinge(self, **kw):
+        self.hinges.append(kw); return kw
 
     def add(self, *a, **k):
         p = Part(*a, **k); self.parts.append(p); return p
@@ -98,15 +122,18 @@ class Scene:
 
     def save(self, path):
         json.dump(dict(name=self.name, fluid=self.fluid, floor_mat=self.floor_mat,
+                       joints=self.joints, hinges=self.hinges,
                        parts=[p.to_dict() for p in self.parts]), open(path, "w"), ensure_ascii=False, indent=1)
 
     @staticmethod
     def load(path):
         d = json.load(open(path)); s = Scene(d["name"]); s.fluid = d.get("fluid"); s.floor_mat = d.get("floor_mat", "concrete")
+        s.joints = d.get("joints", []); s.hinges = d.get("hinges", [])
         for p in d["parts"]: s.add(**p)
         return s
 
     def copy(self):
         s = Scene(self.name); s.fluid, s.floor_mat = self.fluid, self.floor_mat
+        s.joints = [dict(j) for j in self.joints]; s.hinges = [dict(h) for h in self.hinges]
         for p in self.parts: s.add(**p.to_dict())
         return s

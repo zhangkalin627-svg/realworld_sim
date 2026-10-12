@@ -200,16 +200,22 @@ class World3DPage(QtWidgets.QWidget):
                 for nm in s_["body"].split(","): mark[nm] = (230, 70, 70)
         beams = c["beams"]
         for b in beams:
-            if not b["ok"] or b.get("ok_dyn") is False:
+            st = b.get("status", "正常" if b["ok"] else "断裂")
+            if st == "断裂" or b.get("ok_dyn") is False:
+                mark[b["name"]] = (230, 70, 70); verdict = "FAIL" if st == "断裂" else verdict
+                if verdict == "OK": verdict = "WARN"
+            elif st == "屈服" or not b["ok"]:
                 mark[b["name"]] = (230, 120, 40)
                 if verdict == "OK": verdict = "WARN"
+        for j in c.get("bolts", []):
+            if not j["ok"] and verdict == "OK": verdict = "WARN"
         self.view.mark = mark
-        head = {"OK": "全部稳定，受力在材料极限内", "WARN": "稳定，但有构件应力（含冲击）超限", "FAIL": "有物体倾倒/滑落"}[verdict]
+        head = {"OK": "全部稳定，受力在材料极限内", "WARN": "稳定，但有构件应力（含冲击）超限或连接件利用率偏高", "FAIL": "有物体倾倒/滑落/断裂"}[verdict]
         parts.append(f'<h3 style="color:{COLOR[verdict]}">{head}</h3>')
         parts.append(f"<p>仿真 {r.times[-1]:.2f} s" + (f"，约 {r.t_settle:.2f} s 后静止" if r.settled else "，<b>到时间仍未静止（在滚动/滑动）</b>") + "。</p>")
         parts.append("<p><b>稳定性：</b></p><ul>")
         for s_ in c["stability"]:
-            col = {"稳定": "OK", "有位移/下落": "WARN", "倾倒/滑落": "FAIL"}[s_["status"]]
+            col = {"稳定": "OK", "铰接": "OK", "有位移/下落": "WARN", "倾倒/滑落": "FAIL"}[s_["status"]]
             parts.append(f'<li><span style="color:{COLOR[col]}"><b>{_h.escape(s_["body"])}</b>：{s_["status"]}</span>'
                          f'（水平位移 {s_["disp_mm"]:.1f} mm，下落 {-s_["dz_mm"]:.1f} mm，倾转 {s_["tilt_deg"]:.1f}°）</li>')
         parts.append("</ul>")
@@ -234,13 +240,38 @@ class World3DPage(QtWidgets.QWidget):
                 if "n_dyn" in b:
                     c2 = "OK" if b["ok_dyn"] else "FAIL"
                     dyn = f'；<span style="color:{COLOR[c2]}">从 {b["drop_h"]:.0f} mm 高处落下的冲击（放大 ×{b["n_dyn"]:.0f}，保守上界）σ≈{b["sigma_dyn"]:.0f} MPa</span>'
+                st = b.get("status", "正常" if b["ok"] else "断裂")
+                col = {"正常": "OK", "屈服": "WARN", "断裂": "FAIL"}[st]
+                sec = f'，{b["section"]}' if b.get("section") else ""
                 parts.append(f'<li><span style="color:{COLOR[col]}"><b>{_h.escape(b["name"])}</b>：跨距 {b["span"]:.0f} mm，最大弯矩 {b["Mmax"]/1e3:.1f} N·m，'
-                             f'σ={b["sigma"]:.2f} MPa / 屈服 {b["fy"]:.0f}，挠度 {b["defl"]:.3f} mm（L/{b["defl_ratio"]:.0f}）</span>{dyn}</li>')
+                             f'σ={b["sigma"]:.2f} MPa / 屈服 {b["fy"]:.0f} / 抗拉 {b.get("fu", b["fy"]):.0f} → <b>{st}</b>，挠度 {b["defl"]:.3f} mm（L/{b["defl_ratio"]:.0f}）{sec}</span>{dyn}</li>')
             parts.append("</ul>")
+        for j in c.get("bolts", []):
+            col = "OK" if j["ok"] else "FAIL"
+            bt = max(j["bolts"], key=lambda x: -x["T"]); bv = max(j["bolts"], key=lambda x: -x["V"])
+            parts.append(f'<p><b>螺栓组（{_h.escape(j["part"])}，{len(j["bolts"])}×M{j["size"]} {j["grade"]}）：</b>'
+                         f'<span style="color:{COLOR[col]}">接头力 {np.linalg.norm(j["F"]):.0f} N、力矩 {np.linalg.norm(j["M"])/1e3:.2f} N·m；'
+                         f'最大拉 {bt["T"]:.0f} N（{bt["sig"]:.0f} MPa）/ 最大剪 {bv["V"]:.0f} N（{bv["tau"]:.0f} MPa），'
+                         f'利用率 {j["worst"]:.3f}</span>（bearing 型弹性分配；不含撬力放大与预紧）</p>')
+        for h in c.get("hinges", []):
+            life = h.get("life")
+            if life and "L10h" in life:
+                ltxt = f'L10 寿命 ≈ {life["L10h"]:.0f} h'
+            elif life:
+                ltxt = f'静安全 S0 = {life["S0"]:.1f}'
+            else:
+                ltxt = "未选轴承型号"
+            parts.append(f'<p><b>轴承/铰链（{_h.escape(h["part"])}，{h.get("bearing") or "—"}）：</b>'
+                         f'反力 {h["F_radial"]:.0f} N，不平衡力幅值 {h["F_unbalance"]:.0f} N，P={h["P"]:.0f} N，{ltxt}</p>')
+        for hz in c.get("hertz", []):
+            a_b = f'a={hz["a"]:.2f} mm' if "a" in hz else f'b={hz["b"]:.2f} mm'
+            parts.append(f'<p><b>赫兹{hz["kind"]}（{_h.escape(hz["part"])}↔{_h.escape(str(hz["with_"]))}）：</b>'
+                         f'F={hz["F"]:.0f} N，p0={hz["p0"]:.0f} MPa，{a_b}（{hz["note"]}）</p>')
         if self.scene.fluid:
             parts.append(self.float_html(float_check(self.scene)))
-        parts.append('<p style="color:#666">说明：摩擦系数按两种材料中较小者取典型值（估算）；接触面积由接触点包络估算；'
-                     '焊成一组的零件按刚体处理，只校核整体稳定与地面压强；仿真未含浮力/空气阻力/材料破坏后的碎裂。</p>')
+        parts.append('<p style="color:#666">说明：摩擦系数按两种材料中较小者取典型值（估算）；面接触压强的面积由接触点包络估算（球/圆柱另有赫兹应力）；'
+                     '型材按尖角分解（忽略圆角，质量偏轻 ~1-5%）；螺栓组为 bearing 型弹性分配（不含撬力放大、预紧与被连接件变形）；'
+                     '轴承额定为典型样本值；断裂判据按 σ>抗拉强度（不含裂纹扩展与碎裂动画）；仿真未含浮力/空气阻力。</p>')
         self.out.setHtml("".join(parts))
         self.set_frame(self.slider.value())
 

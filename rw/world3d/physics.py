@@ -2,12 +2,18 @@
 流程：Scene → MJCF → 让它在重力下落、碰撞、摩擦、堆叠，直到静止或倒塌 → 取接触力 →
   (1) 稳定性：位移/倾倒角/是否滑走；
   (2) 地面压强、接触压强 vs 材料屈服（接触面积由接触点包络估算，点接触不可靠，会标出）；
-  (3) 单个梁/板：用接触力+自重求弯矩、应力、挠度（Euler-Bernoulli，沿长轴一维）。
-所有单位：scene 用 mm，MuJoCo 用 m/kg/s。"""
+  (3) 单个梁/板/型材：用接触力+自重求弯矩、应力、挠度（Euler-Bernoulli，沿长轴一维）；
+  (4) v0.12 螺栓组校核（接头两侧静力平衡 → 螺栓拉力/剪力）、轴承反力与 L10 寿命、
+      赫兹接触应力（球/圆柱）、断裂判据（应力 > 抗拉强度 fu）。
+所有单位：scene 用 mm，MuJoCo 用 m/kg/s。
+v0.12: 型材零件在 MJCF 里分解成长方体 primitive（质量/惯量/接触都按真实截面），
+       轴承用 MuJoCo hinge 关节；铰链反力由刚体运动学反推（不依赖求解器内部数组）。"""
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation as R
 from .scene import MATS, MU
+from . import profile as _prof
+from . import joints as _jnt
 
 G = 9.81
 
@@ -15,6 +21,24 @@ G = 9.81
 def _quat_wxyz(rot):
     q = rot.as_quat()  # x y z w
     return [q[3], q[0], q[1], q[2]]
+
+
+def _prim_volume(kind, dims):
+    d = dims
+    if kind == "box": return d[0] * d[1] * d[2]
+    if kind == "cyl": return np.pi * (d[0] / 2) ** 2 * d[1]
+    if kind == "tube": return np.pi * ((d[0] / 2) ** 2 - (d[1] / 2) ** 2) * d[2]
+    if kind == "sphere": return 4 / 3 * np.pi * (d[0] / 2) ** 3
+    raise ValueError(kind)
+
+
+def part_com_local(part):
+    """零件局部坐标下的质心（primitive 质量加权；对称件 = 几何中心）。"""
+    prims = part.primitives()
+    if len(prims) == 1: return np.zeros(3)
+    V = np.array([_prim_volume(k, d) for k, d, _ in prims])
+    O = np.array([o for _, _, o in prims])
+    return (V[:, None] * O).sum(axis=0) / V.sum()
 
 
 def build_xml(scene, dt=0.002, floor_mu=0.7):
@@ -27,25 +51,41 @@ def build_xml(scene, dt=0.002, floor_mu=0.7):
         if key not in groups:
             groups[key] = []; order.append(key)
         groups[key].append(i)
+    hinge_of = {}                       # body key -> hinge spec
+    for h in scene.hinges:
+        for i, p in enumerate(scene.parts):
+            if p.name == h["part"]:
+                for key in order:
+                    if i in groups[key] and key != "__world__":
+                        hinge_of[key] = h
     xml = [f'<mujoco><option timestep="{dt}" gravity="0 0 -{G}" integrator="implicitfast" cone="elliptic" impratio="20" noslip_iterations="10"/>',
            '<default><geom solref="0.004 1" solimp="0.95 0.99 0.001"/><pair solref="0.004 1" solimp="0.95 0.99 0.001"/></default><worldbody>',
            f'<geom name="__floor__" type="plane" size="20 20 0.1" contype="0" conaffinity="0"/>']
 
+    geom_part = {}                      # geom 名 -> part 名（型材分解体的 "#k" 后缀 geom 也映射回本零件）
+
     def geom_xml(i, rel_pos=None, rel_quat=None):
         p = scene.parts[i]
-        d = p.dims
-        m = p.mass
-        if p.kind == "box": g = f'type="box" size="{d[0]/2000} {d[1]/2000} {d[2]/2000}"'
-        elif p.kind == "cyl": g = f'type="cylinder" size="{d[0]/2000} {d[1]/2000}"'
-        elif p.kind == "tube": g = f'type="cylinder" size="{d[0]/2000} {d[2]/2000}"'
-        else: g = f'type="sphere" size="{d[0]/2000}"'
         mu = MU.get(p.mat, 0.5)
-        pos = rel_pos if rel_pos is not None else [0, 0, 0]
-        quat = rel_quat if rel_quat is not None else [1, 0, 0, 0]
-        return (f'<geom name="{p.name}" {g} mass="{m}" contype="0" conaffinity="0" '
-                f'pos="{pos[0]} {pos[1]} {pos[2]}" quat="{quat[0]} {quat[1]} {quat[2]} {quat[3]}"/>')
+        out = []
+        prims = p.primitives()
+        for k, (pk, pd, po) in enumerate(prims):
+            d = pd
+            m = _prim_volume(pk, pd) * 1e-9 * p.material["rho"]
+            if pk == "box": g = f'type="box" size="{d[0]/2000} {d[1]/2000} {d[2]/2000}"'
+            elif pk == "cyl": g = f'type="cylinder" size="{d[0]/2000} {d[1]/2000}"'
+            elif pk == "tube": g = f'type="cylinder" size="{d[0]/2000} {d[2]/2000}"'
+            else: g = f'type="sphere" size="{d[0]/2000}"'
+            gname = p.name if k == 0 else f"{p.name}#{k}"
+            geom_part[gname] = p.name
+            pos = np.array(rel_pos if rel_pos is not None else [0, 0, 0]) + p.R.apply(np.array(po) / 1000)
+            quat = rel_quat if rel_quat is not None else [1, 0, 0, 0]
+            out.append(f'<geom name="{gname}" {g} mass="{m}" contype="0" conaffinity="0" '
+                       f'pos="{pos[0]} {pos[1]} {pos[2]}" quat="{quat[0]} {quat[1]} {quat[2]} {quat[3]}"/>')
+        return "\n".join(out)
 
     bodies = []
+    body_anchor = {}
     for key in order:
         idx = groups[key]
         if key == "__world__":
@@ -54,11 +94,19 @@ def build_xml(scene, dt=0.002, floor_mu=0.7):
                 pos = np.array(p.pos) / 1000
                 xml.append(geom_xml(i, pos, _quat_wxyz(p.R)))
             continue
+        h = hinge_of.get(key)
         p0 = scene.parts[idx[0]]
-        anchor = np.array(p0.pos) / 1000
+        anchor = np.array(h["anchor"], float) / 1000 if h else np.array(p0.pos) / 1000
+        body_anchor[key] = anchor
         bname = "b_" + key
         bodies.append((bname, idx))
-        xml.append(f'<body name="{bname}" pos="{anchor[0]} {anchor[1]} {anchor[2]}"><freejoint/>')
+        xml.append(f'<body name="{bname}" pos="{anchor[0]} {anchor[1]} {anchor[2]}">')
+        if h:
+            ax = np.array(h["axis"], float); ax = ax / np.linalg.norm(ax)
+            damp = h.get("damp", 0.0)
+            xml.append(f'<joint name="j_{bname}" type="hinge" axis="{ax[0]} {ax[1]} {ax[2]}" pos="0 0 0" damping="{damp}" limited="false"/>')
+        else:
+            xml.append('<freejoint/>')
         for i in idx:
             p = scene.parts[i]
             rel = np.array(p.pos) / 1000 - anchor
@@ -85,7 +133,7 @@ def build_xml(scene, dt=0.002, floor_mu=0.7):
             mu = min(MU.get(pi.mat, 0.5), MU.get(pj.mat, 0.5))
             xml.append(f'<pair geom1="{pi.name}" geom2="{pj.name}" friction="{mu} {mu} 0.005 0.0001 0.0001"/>')
     xml.append('</contact></mujoco>')
-    return "\n".join(xml), bodies
+    return "\n".join(xml), bodies, geom_part
 
 
 class Result:
@@ -93,15 +141,25 @@ class Result:
 
 
 def simulate(scene, tmax=6.0, fps=30, settle_v=2e-3, dt=0.002, floor_mu=0.7):
-    xml, bodies = build_xml(scene, dt, floor_mu)
+    xml, bodies, geom_part = build_xml(scene, dt, floor_mu)
     m = mujoco.MjModel.from_xml_string(xml)
     d = mujoco.MjData(m)
-    res = Result(); res.scene = scene; res.model_xml = xml
+    res = Result(); res.scene = scene; res.model_xml = xml; res.geom_part = geom_part
     bid = [mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, b) for b, _ in bodies]
+    # v0.12 轴承铰链：初速（spin_rpm）与运动学反推所需的句柄
+    hinges = []
+    for bi, (bname, idx) in enumerate(bodies):
+        spec = next((h for h in scene.hinges if h["part"] in [scene.parts[i].name for i in idx]), None)
+        if spec is None: continue
+        jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "j_" + bname)
+        dof = int(m.jnt_dofadr[jid])
+        ax = np.array(spec["axis"], float); ax /= np.linalg.norm(ax)
+        if spec.get("spin_rpm"):
+            d.qvel[dof] = float(spec["spin_rpm"]) * 2 * np.pi / 60
+        hinges.append(dict(spec=spec, bi=bi, dof=dof, axis_local=ax, body_id=bid[bi]))
     frames, times = [], []
     nstep = int(tmax / dt); every = max(1, int(1 / fps / dt))
     quiet = 0; t_settle = None
-    acc_forces = None
     for k in range(nstep):
         mujoco.mj_step(m, d)
         if k % every == 0:
@@ -112,16 +170,35 @@ def simulate(scene, tmax=6.0, fps=30, settle_v=2e-3, dt=0.002, floor_mu=0.7):
             if quiet * dt > 0.4 and t_settle is None:
                 t_settle = d.time - 0.4
                 break
-    # 再平均 0.1 s 的接触力
+    # 再平均 nav 步：接触力 + 铰链反力（运动学反推，逐步记录）
     nav = 50; F = {}
+    hinge_series = {h["spec"]["part"]: [] for h in hinges}
     for _ in range(nav):
         mujoco.mj_step(m, d)
+        body_contact = {}
         for ci in range(d.ncon):
             c = d.contact[ci]
             f6 = np.zeros(6); mujoco.mj_contactForce(m, d, ci, f6)
             fw = c.frame.reshape(3, 3).T @ f6[:3]
             g1 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, c.geom1); g2 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, c.geom2)
             F.setdefault((g1, g2), []).append((c.pos.copy(), fw.copy()))
+            # 按 geom→part→body 归集接触力（作用在 geom2 上为 +f，geom1 上为 -f）
+            for gg, sgn in ((g1, -1.0), (g2, 1.0)):
+                pn = geom_part.get(gg)
+                if pn is None: continue
+                body_contact[pn] = body_contact.get(pn, np.zeros(3)) + sgn * fw
+        for h in hinges:
+            b = h["body_id"]
+            omega = d.cvel[b][:3]
+            ax_w = d.xmat[b].reshape(3, 3) @ h["axis_local"]
+            alpha = ax_w * d.qacc[h["dof"]]
+            r = d.xipos[b] - d.xpos[b]
+            a_com = np.cross(alpha, r) + np.cross(omega, np.cross(omega, r))
+            mss = m.body_mass[b]
+            Fc = mss * (a_com - np.array([0, 0, -G]))
+            for i in bodies[h["bi"]][1]:
+                Fc -= body_contact.get(scene.parts[i].name, np.zeros(3))
+            hinge_series[h["spec"]["part"]].append(Fc.copy())
     contacts = {}
     for k, lst in F.items():
         pts = {}
@@ -130,17 +207,31 @@ def simulate(scene, tmax=6.0, fps=30, settle_v=2e-3, dt=0.002, floor_mu=0.7):
             a = pts.setdefault(key, [pos, np.zeros(3), 0]); a[1] += fw; a[2] += 1
         contacts[k] = [(v[0] * 1000, v[1] / nav) for v in pts.values()]   # 对 nav 步时间平均（不是对出现次数平均）   # 位置 mm, 力 N (geom1→geom2)
     res.contacts = contacts
+    res.hinge_series = {k: np.array(v) for k, v in hinge_series.items()}
     res.frames = np.array(frames); res.times = np.array(times)
     res.bodies = bodies
     res.t_settle = t_settle
     res.settled = t_settle is not None
     final = np.array([np.r_[d.xpos[b], d.xquat[b]] for b in bid])
     res.final = final
-    res.geom_pose = {}
-    for gi in range(m.ngeom):
-        n = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gi)
-        if n and n != "__floor__":
-            res.geom_pose[n] = (d.geom_xpos[gi].copy() * 1000, d.geom_xmat[gi].reshape(3, 3).copy())
+    # 每个零件的世界位姿（由所属刚体变换得到；型材分解不改变 body 划分）
+    res.part_pose = {}
+    for bi, (bname, idx) in enumerate(bodies):
+        key = bname[2:]
+        # body 的锚点(初始 body pos) = anchor；part 初始 rel = p.pos/1000 - anchor
+        anchor = None
+        for h in scene.hinges:
+            if h["part"] in [scene.parts[i].name for i in idx]:
+                anchor = np.array(h["anchor"], float) / 1000
+        if anchor is None:
+            anchor = np.array(scene.parts[idx[0]].pos) / 1000
+        xq = d.xquat[bid[bi]]
+        Rb = R.from_quat([xq[1], xq[2], xq[3], xq[0]]).as_matrix()
+        for i in idx:
+            p = scene.parts[i]
+            rel = np.array(p.pos) / 1000 - anchor
+            pw = d.xpos[bid[bi]] + Rb @ rel
+            res.part_pose[p.name] = (pw * 1000, Rb @ p.R.as_matrix())
     return res
 
 
@@ -148,7 +239,10 @@ def simulate(scene, tmax=6.0, fps=30, settle_v=2e-3, dt=0.002, floor_mu=0.7):
 def check(res):
     sc = res.scene
     out = dict(stability=[], bearing=[], beams=[], summary=[])
-    # --- 1 稳定性
+    gp = res.geom_part
+    pn = lambda g: gp.get(g, g)                      # geom 名 → part 名（去掉型材 "#k" 分解）
+    # --- 1 稳定性（铰接 body 按设计旋转，不判倾倒）
+    hinged_names = {h["part"] for h in sc.hinges}
     init = {}
     for bname, idx in res.bodies:
         p0 = sc.parts[idx[0]]
@@ -162,16 +256,16 @@ def check(res):
         disp = np.linalg.norm((pf - pos0)[:2])      # 水平位移；竖向下落单独看 dz
         name = ",".join(sc.parts[i].name for i in idx)
         dz = pf[2] - pos0[2]
+        if any(sc.parts[i].name in hinged_names for i in idx):
+            out["stability"].append(dict(body=name, disp_mm=float(disp), dz_mm=float(dz), tilt_deg=float(tilt_axis), status="铰接"))
+            continue
         status = "稳定"
         if tilt_axis > 25 or disp > 150: status = "倾倒/滑落"
         elif disp > 5 or tilt_axis > 1 or abs(dz) > 5: status = "有位移/下落"
         out["stability"].append(dict(body=name, disp_mm=float(disp), dz_mm=float(dz), tilt_deg=float(tilt_axis), status=status))
     # --- 2 压强
     for (g1, g2), pts in res.contacts.items():
-        fn = sum(max(0, -f[2]) if g1 == "__floor__" else 0 for _, f in pts)   # 占位，下面统一算
         P = np.array([p for p, _ in pts]); Fv = np.array([f for _, f in pts])
-        Fmag = np.linalg.norm(Fv.sum(axis=0))
-        # 法向力：力矢量和的大小（对静力平衡的竖直接触≈竖向分量）
         Fz = abs(Fv[:, 2].sum())
         if Fz < 1: continue
         if len(P) >= 3:
@@ -181,18 +275,18 @@ def check(res):
             area = 1.0
         press = Fz / area  # N/mm2 = MPa
         if g1 == "__floor__":
-            mats = [MATS[sc.floor_mat]["fy"], MATS[sc.get(g2).mat].get("creep_fy", MATS[sc.get(g2).mat]["fy"])]
+            mats = [MATS[sc.floor_mat]["fy"], MATS[sc.get(pn(g2)).mat].get("creep_fy", MATS[sc.get(pn(g2)).mat]["fy"])]
             nm1 = "地面"
         else:
-            p1, p2 = sc.get(g1), sc.get(g2)
+            p1, p2 = sc.get(pn(g1)), sc.get(pn(g2))
             mats = [p.material.get("creep_fy", p.material["fy"]) for p in (p1, p2)]
-            nm1 = g1
+            nm1 = pn(g1)
         lim = min(mats) / 1e6
         reliable = len(P) >= 3 and area >= 50
-        out["bearing"].append(dict(pair=f"{nm1}↔{g2}", F=float(Fz), area=float(area), p=float(press), lim=float(lim),
+        out["bearing"].append(dict(pair=f"{nm1}↔{pn(g2)}", F=float(Fz), area=float(area), p=float(press), lim=float(lim),
                                    ok=bool(press <= lim), reliable=bool(reliable), n=len(P)))
-    # --- 3 梁
-    out["beams"] = [beam_check(res, p) for p in sc.parts if p.kind == "box" and not p.group and not p.fixed]
+    # --- 3 梁/型材
+    out["beams"] = [beam_check(res, p) for p in sc.parts if p.kind in BEAM_KINDS and not p.group and not p.fixed]
     out["beams"] = [b for b in out["beams"] if b]
     # 冲击放大（材料力学落重冲击公式，保守上界）：n = 1 + sqrt(1 + 2h/δst)
     drops = {}
@@ -203,17 +297,43 @@ def check(res):
     for b in out["beams"]:
         hmax = 0.0
         for (g1, g2) in res.contacts:
-            if b["name"] in (g1, g2):
-                other = g2 if g1 == b["name"] else g1
+            if b["name"] in (pn(g1), pn(g2)):
+                other = pn(g2) if pn(g1) == b["name"] else pn(g1)
                 hmax = max(hmax, drops.get(other, 0.0))
         b["drop_h"] = hmax
         if hmax > 20 and b["defl"] > 1e-6:
             n = 1 + np.sqrt(1 + 2 * hmax / b["defl"])
             b["n_dyn"] = float(n); b["sigma_dyn"] = float(n * b["sigma"]); b["ok_dyn"] = bool(b["sigma_dyn"] <= b["fy"])
+    # --- 4 v0.12 螺栓组校核
+    out["bolts"] = [joint_check(res, j) for j in sc.joints]
+    out["bolts"] = [b for b in out["bolts"] if b]
+    # --- 5 v0.12 轴承反力与 L10 寿命
+    out["hinges"] = []
+    for h in sc.hinges:
+        ser = res.hinge_series.get(h["part"])
+        if ser is None or len(ser) == 0: continue
+        rpm = abs(float(h.get("spin_rpm", 0.0)))
+        ax = np.array(h["axis"], float); ax /= np.linalg.norm(ax)
+        F_mean = ser.mean(axis=0)
+        rad = float(np.linalg.norm(F_mean - np.dot(F_mean, ax) * ax))
+        amp = float(np.linalg.norm(ser - F_mean, axis=1).max())      # 旋转不平衡力幅值
+        P_eq = rad + amp                                              # 当量动载荷：静载 + 不平衡幅值（保守）
+        rec = dict(part=h["part"], bearing=h.get("bearing"), rpm=rpm,
+                   F_mean=[float(x) for x in F_mean], F_radial=rad, F_unbalance=amp, P=float(P_eq))
+        if h.get("bearing") and rpm > 0:
+            rec["life"] = _jnt.bearing_life(h["bearing"], P_eq, rpm)
+        elif h.get("bearing"):
+            rec["life"] = dict(S0=float(_jnt.BEARINGS[h["bearing"]]["C0"] / max(P_eq, 1e-9)),
+                               C0=_jnt.BEARINGS[h["bearing"]]["C0"], P=float(P_eq), rpm=0.0, code=h["bearing"])
+        out["hinges"].append(rec)
+    # --- 6 v0.12 赫兹接触应力（球/圆柱 vs 平面类零件）
+    out["hertz"] = hertz_check(res)
     # 汇总
     bad = [s for s in out["stability"] if s["status"] != "稳定"]
     out["unstable"] = bad
     out["floor"] = floor_pressure(res)
+    out["broken"] = [b for b in out["beams"] if b.get("status") == "断裂"]
+    out["yielded"] = [b for b in out["beams"] if b.get("status") == "屈服"]
     return out
 
 
@@ -227,29 +347,123 @@ def floor_pressure(res):
     return dict(total_N=float(Fz), n=len(pts))
 
 
+def joint_check(res, j):
+    """螺栓组校核：side 一侧的所有外力（重力+接触力）对接头中心求和 → F, M → 螺栓组分配。"""
+    sc = res.scene
+    gp = res.geom_part
+    side = j.get("side") or [j["part"]]
+    try:
+        parts = [sc.get(nm) for nm in side]
+    except KeyError:
+        return None
+    center = np.array(j["center"], float)
+    F = np.zeros(3); M = np.zeros(3)
+    for p in parts:                                   # 重力（质心处）
+        com = np.array(p.pos) + p.R.apply(part_com_local(p))
+        Fg = np.array([0, 0, -p.mass * G])
+        F += Fg; M += np.cross(com - center, Fg)
+    for (g1, g2), pts in res.contacts.items():        # 接触力（只取作用在 side 零件上的）
+        for gg, sgn in ((g1, -1.0), (g2, 1.0)):
+            if gp.get(gg, gg) not in side: continue
+            for pos, f in pts:
+                F += sgn * f; M += np.cross(pos - center, sgn * f)
+    r = _jnt.bolt_group_check(F, M, center, j["normal"], j["coords"], j["size"], j["grade"], j.get("e1"))
+    r.update(base=j["base"], part=j["part"], side=side,
+             F=[float(x) for x in F], M=[float(x) for x in M])
+    return r
+
+
+def hertz_check(res):
+    """球/圆柱零件的赫兹接触应力（与平面类零件 box/型材/地面接触时）。点接触给 p0，线接触给 p0。
+    赫兹压力常超过屈服而不失效（三向受压），这里只做报告并与屈服并列表述，不断言破坏。"""
+    sc = res.scene
+    gp = res.geom_part
+    out = []
+    for (g1, g2), pts in res.contacts.items():
+        n1, n2 = gp.get(g1, g1), gp.get(g2, g2)
+        if g1 == "__floor__": n1 = None
+        pair_parts = []
+        for nm in (n1, n2):
+            if nm is None:
+                pair_parts.append(("__floor__", MATS[sc.floor_mat]))
+            else:
+                p = sc.get(nm); pair_parts.append((p, p.material))
+        (o1, m1), (o2, m2) = pair_parts
+        Fz = abs(sum(f[2] for _, f in pts))
+        if Fz < 1: continue
+        for (oth, mo), (self_p, ms) in (((o1, m1), (o2, m2)), ((o2, m2), (o1, m1))):
+            if not hasattr(self_p, "kind"): continue
+            if self_p.kind == "sphere":
+                h = _jnt.hertz_point(Fz, self_p.dims[0] / 2, ms["E"], ms["nu"], mo["E"], mo["nu"])
+                out.append(dict(kind="点接触", part=self_p.name, F=float(Fz), p0=h["p0"], a=h["a"],
+                                with_=(oth if isinstance(oth, str) else oth.name),
+                                fy=ms["fy"] / 1e6, note="赫兹点接触；p0>屈服不一定失效（三向应力）"))
+            elif self_p.kind in ("cyl", "tube"):
+                # 只在线接触姿态（轴线水平）时有意义
+                pp = res.part_pose.get(self_p.name)
+                if pp is None: continue
+                axidx = 1 if self_p.kind == "cyl" else 2
+                e = pp[1][:, axidx]
+                if abs(e[2]) > 0.3: continue
+                Lc = self_p.dims[axidx]
+                h = _jnt.hertz_line(Fz, Lc, self_p.dims[0] / 2, ms["E"], ms["nu"], mo["E"], mo["nu"])
+                out.append(dict(kind="线接触", part=self_p.name, F=float(Fz), p0=h["p0"], b=h["b"],
+                                with_=(oth if isinstance(oth, str) else oth.name),
+                                fy=ms["fy"] / 1e6, note="赫兹线接触；按全长接触估算"))
+    return out
+
+
+BEAM_KINDS = ("box", "tube", "ibeam", "channel", "angle", "sqtube")
+
+
+def _beam_section(part, Rm):
+    """返回 (ax, e, h, b, I, W, axis_note)：梁长轴索引、长轴单位向量(世界)、截面高宽、弯曲惯性矩/系数。
+    弯曲轴取世界水平方向对应的形心主轴（竖向载荷 → 绕水平形心轴弯）。"""
+    d = np.array(part.dims, float)
+    if part.kind == "box":
+        ax = int(np.argmax(d))
+        e = Rm[:, ax]
+        others = [i for i in range(3) if i != ax]
+        zc = [abs(Rm[2, i]) for i in others]
+        hi = others[int(np.argmax(zc))]; bi = others[1 - int(np.argmax(zc))]
+        h, b = d[hi], d[bi]
+        I = b * h ** 3 / 12; W = I / (h / 2)
+        return ax, e, h, b, I, W, "矩形 b·h³/12"
+    if part.kind == "tube":
+        ax = 2
+        e = Rm[:, ax]
+        Do, Di = d[0], d[1]
+        I = np.pi * (Do ** 4 - Di ** 4) / 64; W = I / (Do / 2)
+        return ax, e, Do, Do, I, W, "圆管 π(D⁴-d⁴)/64"
+    # 型材：长度沿局部 X（局部坐标的第 0 轴）；截面在局部 Y-Z（H 沿局部 Z，B 沿局部 Y）
+    ax = len(d) - 1                     # dims 里的长度槽位（取 L 用）
+    e = Rm[:, 0]
+    sm = _prof.section_moments(part.kind, d)
+    if abs(Rm[2, 2]) >= abs(Rm[2, 1]):     # 局部 Z(H) 更接近竖直 → 绕局部 Y(强轴)弯
+        return ax, e, d[0], d[1], sm["Iy"], sm["Wy"], "型材强轴 Iy"
+    return ax, e, d[0], d[1], sm["Iz"], sm["Wz"], "型材弱轴 Iz"
+
+
 def beam_check(res, part):
-    """一根箱型梁/板：沿长轴分析弯矩。只对"自由体"可靠（接触力即全部外力）。"""
+    """一根梁/板/型材：沿长轴分析弯矩。只对"自由体"可靠（接触力即全部外力）。
+    v0.12: 支持型材（真实截面 I/W）与圆管；应力分级：σ≤fy 正常 / fy<σ≤fu 屈服(塑性变形) / σ>fu 断裂。"""
     if part.group: return None
-    gp = res.geom_pose.get(part.name)
+    gp = res.part_pose.get(part.name)
     if gp is None: return None
     c, Rm = gp
     dims = np.array(part.dims, float)
-    ax = int(np.argmax(dims)); L = dims[ax]
-    e = Rm[:, ax]                       # 长轴方向(世界)
+    ax, e, h, b, I, W, note = _beam_section(part, Rm)
+    L = dims[ax]
     if abs(e[2]) > 0.5: return None      # 竖向构件(柱)不当梁算
-    others = [i for i in range(3) if i != ax]
-    zc = [abs(Rm[2, i]) for i in others]
-    hi = others[int(np.argmax(zc))]; bi = others[1 - int(np.argmax(zc))]
-    h, b = dims[hi], dims[bi]
     mat = part.material
     E = mat["E"] / 1e6
-    I = b * h ** 3 / 12                   # mm4
-    W = I / (h / 2)
+    gp2 = res.geom_part
     # 载荷点
     loads = []   # (s, Fz) s 以长轴方向从中心起, mm
     for (g1, g2), pts in res.contacts.items():
-        if part.name not in (g1, g2): continue
-        sign = 1 if g2 == part.name else -1   # 力 geom1→geom2：作用在 geom2 上为 +F
+        n1, n2 = gp2.get(g1, g1), gp2.get(g2, g2)
+        if part.name not in (n1, n2): continue
+        sign = 1 if n2 == part.name else -1   # 力 geom1→geom2：作用在 geom2 上为 +F
         for p, f in pts:
             s = float(np.dot(p - c, e))
             loads.append((s, sign * f[2]))
@@ -283,8 +497,11 @@ def beam_check(res, part):
     inside = (s_grid >= s0) & (s_grid <= s1)
     dmax = float(np.abs(wdef[inside]).max()) if inside.any() else 0.0
     span = float(s1 - s0)
+    fy = mat["fy"] / 1e6; fu = mat.get("fu", mat["fy"]) / 1e6
+    status = "正常" if sig <= fy else ("屈服" if sig <= fu else "断裂")
     return dict(name=part.name, L=float(L), span=span, b=float(b), h=float(h), Mmax=Mmax, sigma=float(sig),
-                fy=mat["fy"] / 1e6, ok=bool(sig <= mat["fy"] / 1e6), defl=dmax, defl_ratio=span / dmax if dmax > 1e-9 else 1e9,
+                fy=fy, fu=float(fu), status=status, section=note,
+                ok=bool(sig <= fy), defl=dmax, defl_ratio=span / dmax if dmax > 1e-9 else 1e9,
                 s_grid=s_grid, M=M, w=wdef, s0=float(s0), s1=float(s1))
 
 

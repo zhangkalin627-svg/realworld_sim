@@ -69,6 +69,50 @@ def table_cart():
     return s
 
 
+def ibeam_bridge():
+    """H200×200 工字钢搁两墩，跨中压一个钢块。"""
+    s = Scene("工字钢梁桥")
+    s.add("工字钢", "ibeam", [200, 200, 8, 12, 2400], "Q235", pos=[0, 0, 400])
+    s.add("墩L", "box", [150, 300, 300], "concrete", pos=[-1050, 0, 150], fixed=True)
+    s.add("墩R", "box", [150, 300, 300], "concrete", pos=[1050, 0, 150], fixed=True)
+    s.add("钢块", "box", [300, 200, 200], "Q235", pos=[0, 0, 600])
+    return s
+
+
+def wall_bracket():
+    """壁挂支架：背板+悬臂（固定，相当于螺栓把支架锁在墙上），臂端压一个钢块；
+    4×M12 螺栓组校核拉力/剪力。"""
+    s = Scene("壁挂支架 + 4×M12 螺栓组")
+    s.add("背板", "box", [20, 100, 200], "Q235", pos=[10, 0, 400], fixed=True, group="支架")
+    s.add("悬臂", "box", [300, 80, 20], "Q235", pos=[170, 0, 490], fixed=True, group="支架")
+    s.add("钢块", "box", [100, 100, 100], "Q235", pos=[270, 0, 550])
+    s.add_joint(base="墙", part="悬臂", side=["背板", "悬臂"], size=12, grade="8.8",
+                center=[0, 0, 400], normal=[1, 0, 0], e1=[0, 1, 0],
+                coords=[(-35, -70), (35, -70), (-35, 70), (35, 70)])
+    return s
+
+
+def bearing_rotor(rpm=3000):
+    """轴 + 偏心块，6206 轴承铰接，按转速旋转：测轴承反力、不平衡力、L10 寿命。"""
+    s = Scene(f"轴承转子 {rpm:g} rpm")
+    s.add("轴", "cyl", [30, 500], "45", pos=[250, 0, 600], rot=[0, 90, 0], group="转子")
+    s.add("偏心块", "box", [40, 40, 20], "45", pos=[250, 150, 600], group="转子")
+    s.add_hinge(part="轴", anchor=[250, 0, 600], axis=[1, 0, 0], bearing="6206", damp=(0.05 if not rpm else 1e-4), spin_rpm=rpm)
+    return s
+
+
+def glass_drop(load_kg=20.0):
+    """玻璃板搁两支座，跨中放钢块：应力超过玻璃抗拉强度 → 判断裂。"""
+    m = load_kg
+    a = (m / 7850e-9) ** (1 / 3)          # 钢块边长 mm
+    s = Scene(f"玻璃板 + {m:g} kg 钢块（断裂判据）")
+    s.add("玻璃板", "box", [400, 100, 6], "glass", pos=[0, 0, 203])
+    s.add("座L", "box", [40, 100, 200], "concrete", pos=[-180, 0, 100], fixed=True)
+    s.add("座R", "box", [40, 100, 200], "concrete", pos=[180, 0, 100], fixed=True)
+    s.add("钢块", "box", [a, a, a], "Q235", pos=[0, 0, 206 + a / 2])
+    return s
+
+
 PRESETS = {
     "钢板桥：两墩 + 铜块": beam_bridge,
     "叠积木 外伸系数 0.95（应稳）": lambda: harmonic_stack(0.95),
@@ -78,4 +122,8 @@ PRESETS = {
     "钢块砸木板": drop_stack,
     "水里的浮沉": float_test,
     "焊接台架 + 偏载": table_cart,
+    "工字钢梁桥": ibeam_bridge,
+    "壁挂支架 + 螺栓组": wall_bracket,
+    "轴承转子 3000rpm": bearing_rotor,
+    "玻璃板断裂演示": glass_drop,
 }
