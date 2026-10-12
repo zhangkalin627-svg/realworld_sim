@@ -1,0 +1,9 @@
+* 真实的世界 通用模型库（典型参数，非具体厂家器件）MIT
+.model DGEN D(Is=1e-14 Rs=0.01 N=1 Cjo=10p)
+.model D1N4148 D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 Tt=20n Bv=100 Ibv=100u)
+.model D1N4007 D(Is=7.02767n Rs=0.0341512 N=1.80803 Cjo=10p M=0.33 Tt=4.32e-6 Bv=1000 Ibv=5u)
+.model DFAST D(Is=1e-12 Rs=0.02 N=1.3 Cjo=200p Tt=50n Bv=600)
+.model QNPN NPN(Is=6.7f Bf=200 Vaf=74 Br=0.7 Rb=10 Rc=1 Cjc=3.6p Cje=4.5p Tf=0.3n Tr=240n)
+.model QPNP PNP(Is=6.5f Bf=180 Vaf=50 Br=4 Rb=10 Rc=2.5 Cjc=4.5p Cje=8p Tf=0.6n Tr=100n)
+.model NMOS_SIG NMOS(Level=1 Vto=1.6 Kp=0.1 Lambda=0.01 Cgso=50p Cgdo=10p)
+.model NPWR VDMOS(Vto=4 Kp=20 Rd=15m Rs=10m Rg=2 Cgdmax=1.5n Cgdmin=50p Cgs=2n Cjo=800p Is=1e-11 Rb=10m Tt=100n)

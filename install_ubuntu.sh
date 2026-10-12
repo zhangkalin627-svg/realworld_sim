@@ -3,6 +3,8 @@
 set -e
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip fonts-noto-cjk libxcb-cursor0 libxkbcommon-x11-0 libegl1
+# v0.6 电路仿真需要 ngspice（BSD-3 许可证，作为独立外部程序调用）
+sudo apt-get install -y ngspice
 cd "$(dirname "$0")"
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip

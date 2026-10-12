@@ -1,0 +1,10 @@
+.title KiCad schematic npn_switch
+.include "../../rw/circuit/lib/generic.lib"
+V1 /in GND PULSE(0 5 0 10n 10n 0.5m 1m)
+V2 /vcc GND DC 12
+R1 /in /base 10k
+R2 /vcc /col 1k
+C1 /col GND 100n
+Q1 /col /base GND QNPN
+.tran 1u 5m
+.end

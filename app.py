@@ -1,4 +1,4 @@
-"""真实的世界 v0.5：感应加热淬火 + 结构校核 + PLC 虚拟调试 + 物理沙盒 + 材料库（桌面程序）
+"""真实的世界 v0.6：感应加热淬火 + 结构校核 + PLC 虚拟调试 + 物理沙盒 + 材料库 + 电路/示波器（桌面程序）
 运行:  python3 app.py
 """
 import sys, warnings, traceback
@@ -181,7 +181,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.5")
+        self.setWindowTitle("真实的世界 v0.6")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -207,6 +207,9 @@ class MainWindow(QtWidgets.QMainWindow):
         from rw.gui_materials import MaterialsPage
         self.mat = MaterialsPage()
         self.top.addTab(self.mat, "⑤ 材料库")
+        from rw.gui_circuit import CircuitPage
+        self.circ = CircuitPage()
+        self.top.addTab(self.circ, "⑥ 电路/示波器")
         self.setCentralWidget(self.top)
 
 
@@ -236,6 +239,36 @@ def main():
             if sub == 0:
                 w.mat.pt.prop.setCurrentIndex(1); w.mat.pt.show_el("Ag")
             QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("circ"):
+            w.top.setCurrentWidget(w.circ)
+            pg = w.circ
+            sub = int(which[4:]) if which[4:].isdigit() else 0
+            # circ0 半桥四通道+时间光标；circ1 运放振荡器+FFT+电压光标；circ2 导入 KiCad 网表+Auto Set；circ3 整流（差分通道）
+            key = {0: "halfbridge", 1: "astable", 3: "rect"}.get(sub)
+            for i in range(pg.pick.count()):
+                d = pg.pick.itemData(i)
+                if (key and d == ("ex", key)) or (sub == 2 and d[0] == "file" and d[1].endswith("npn_switch_kicad.net")):
+                    pg.pick.setCurrentIndex(i); break
+            pg.simulate()
+            poll = QtCore.QTimer(w)
+
+            def after():
+                if sub == 0:
+                    pg.cur_t.setChecked(True); pg.t1.setValue(2.0); pg.t2.setValue(7.0)
+                elif sub == 1:
+                    pg.fft_on.setChecked(True); pg.win.setCurrentIndex(1); pg.fft_span.setCurrentIndex(1); pg.fmax.setValue(10.0)
+                    pg.cur_v.setChecked(True); pg.vch.setCurrentIndex(1); pg.v1.setValue(-1.6); pg.v2.setValue(1.6)
+                    pg.ctl.setCurrentIndex(3)
+                elif sub == 2:
+                    pg.ctl.setCurrentIndex(1)
+                QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
+
+            def check():
+                if pg.btn.isEnabled() and pg.scope.t is not None:
+                    poll.stop(); after()
+            poll.timeout.connect(check)
+            poll.start(300)
+            QtCore.QTimer.singleShot(60000, lambda: (w.grab().save(out), app.quit()))
         elif which == "plcdemo":
             w.top.setCurrentIndex(2); w.plc_tabs.setCurrentWidget(w.plc_demo)
             w.plc_demo.load(); w.plc_demo.spd.setCurrentIndex(2)

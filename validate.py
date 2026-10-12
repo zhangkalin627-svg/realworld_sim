@@ -79,3 +79,71 @@ inr = []
 for k in ("Constantan", "H62", "H68", "Monel400", "Cr20Ni80", "QSn6.5-0.1", "Invar36", "304"):
     r = mix(GRADES[k]["comp"]); lo, hi = r["resist_range"]; inr.append(lo <= GRADES[k]["resist"] <= hi)
 print("固溶体电阻率：实测落在估算范围内 %d/%d 个牌号" % (sum(inr), len(inr)))
+# 8) 电路仿真（ngspice）+ 虚拟示波器：和解析解对比
+from rw.circuit.spice import find_ngspice, ngspice_version
+if not find_ngspice():
+    print("电路仿真：没找到 ngspice，跳过（Ubuntu: sudo apt install ngspice）")
+else:
+    from rw.circuit import examples as CX, kicad as KI
+    from rw.circuit.scope import Scope, measure, fft_dbv, peak_near, crossings
+    pct = lambda a, b: 100 * (a - b) / b
+    print("ngspice 版本 %s" % ngspice_version())
+    # 8a RC：63.2% 点 = τ；10–90% 上升时间 = τ·ln9 ≈ 2.197τ
+    e = CX.get("rc"); w = e.circuit.tran(**e.tran); tau = e.values["tau"]
+    t, y = w.x, w["out"]; t63 = crossings(t, y, 0.632120559 * e.values["V"], "rise")[0]
+    tr = measure(t[t < 0.5 / e.values["f"]], y[t < 0.5 / e.values["f"]])["上升时间"]
+    print("RC：τ 理论 %.4f ms / 仿真 63.2%%点 %.4f ms（误差 %+.2f%%）；上升时间 理论 %.4f ms / 仿真 %.4f ms（%+.2f%%）" % (
+        tau * 1e3, t63 * 1e3, pct(t63, tau), e.values["tr"] * 1e3, tr * 1e3, pct(tr, e.values["tr"])))
+    # 示波器：触发 + 屏幕测量（RC 输出，第 2 个周期）
+    sc = Scope(); sc.load(w); sc.ch[0].source = "out"; sc.ch[0].on = True; sc.tdiv = 4e-3; sc.hpos = 4 * 4e-3
+    sc.trig.source, sc.trig.level = 1, 0.05; fr = sc.acquire(); m = sc.measure(1, fr)
+    print("  示波器(RC 输出)：频率 %.3f Hz（理论 %.0f）、上升时间 %.4f ms（理论 %.4f）、Vmax %.4f V（理论 1-e^-10=%.4f）" % (
+        m["频率"] or float('nan'), e.values["f"], (m["上升时间"] or float('nan')) * 1e3, e.values["tr"] * 1e3, m["Vmax"], 1 - 2.718281828 ** -10))
+    # 8b RLC 串联：交流扫频找电流峰值（R 两端电压最大）→ f0
+    e = CX.get("rlc"); w = e.circuit.ac(**e.ac); import numpy as _np
+    mag = _np.abs(w["b"]); i = int(_np.argmax(mag)); f = w.x
+    a_, b_, c_ = _np.log(mag[i - 1:i + 2]); fx = _np.log(f[i - 1:i + 2])  # 对数坐标抛物线插值
+    fpk = _np.exp(fx[1] + 0.5 * (fx[2] - fx[1]) * (a_ - c_) / (a_ - 2 * b_ + c_))
+    print("RLC：谐振频率 理论 %.2f Hz / 仿真 %.2f Hz（误差 %+.3f%%）；峰值 |V_R/V_in| = %.4f（理论 1）" % (e.values["f0"], fpk, pct(fpk, e.values["f0"]), mag[i]))
+    wt = e.circuit.tran(**e.tran); vc = wt["a-b"]; tt = wt.x; m = (tt > 1e-6) & (tt < 2.4e-3)
+    pk = crossings(tt[m], vc[m] - 0.5 * 1.0 * 0 - 1.0, 0.0, "rise")  # 绕终值 1 V 的振荡
+    fd = 1 / _np.mean(_np.diff(pk[:6])) if len(pk) > 2 else float('nan')
+    print("  方波激励振铃频率 理论 fd=%.2f Hz / 仿真 %.2f Hz（误差 %+.2f%%）" % (e.values["fd"], fd, pct(fd, e.values["fd"])))
+    # 8c 桥式整流 + 电容滤波：纹波 vs I/(2fC)
+    e = CX.get("rect"); w = e.circuit.tran(**e.tran); t = w.x; m = t > t[-1] - 5 / e.values["f"]
+    v = w["out"][m]; I = measure(t[m], w["i(vsense)"][m])["Vavg"]; rip = v.max() - v.min()
+    th = I / (2 * e.values["f"] * e.values["C"])
+    print("整流：负载电流 %.4f A，纹波 仿真 %.4f V / 近似公式 I/(2fC)=%.4f V（公式偏大 %+.1f%%，因为公式假设整个半周都在放电）" % (I, rip, th, pct(th, rip)))
+    # 8d FFT：理想方波（0~1 V，1 kHz）基波 2/π/√2 Vrms，3 次/5 次谐波 = 1/3、1/5
+    from rw.circuit.spice import Circuit
+    q = Circuit("square"); q.V("1", "sq", "0", pulse=(0, 1, 0, 1e-9, 1e-9, 0.5e-3 - 1e-9, 1e-3)); q.R("1", "sq", "0", 1e3)
+    w = q.tran(1e-6, 20e-3, tmax=1e-6); f, db, vr = fft_dbv(w.x, w["sq"], "flattop")
+    f1, a1 = peak_near(f, vr, 1e3); f3, a3 = peak_near(f, vr, 3e3); f5, a5 = peak_near(f, vr, 5e3)
+    import math as _m
+    th1 = 2 / _m.pi / _m.sqrt(2)
+    print("FFT（平顶窗，理想方波、整周期采样 → 主要验证 FFT 幅值归一化）：基波 %.1f Hz（理论 1000）幅值 %.4f Vrms（理论 %.4f，%+.2f%%，%.2f dBV）；3 次/基波 %.4f（理论 0.3333，%+.2f%%）；5 次/基波 %.4f（理论 0.2000，%+.2f%%）" % (
+        f1, a1, th1, pct(a1, th1), 20 * _m.log10(a1), a3 / a1, pct(a3 / a1, 1 / 3), a5 / a1, pct(a5 / a1, 0.2)))
+    sc = Scope(); sc.load(w); sc.ch[0].source = "sq"; sc.ch[0].on = True; sc.tdiv = 0.5e-3; sc.trig.level = 0.5
+    fr = sc.acquire(); mm = sc.measure(1, fr)
+    print("  示波器(方波)：Vpp %.4f（1）、Vavg %.4f（0.5）、Vrms %.4f（0.7071）、频率 %.3f Hz（1000）、占空比 %.4f（0.5）" % (
+        mm["Vpp"], mm["Vavg"], mm["Vrms"], mm["频率"], mm["占空比"]))
+    # 8e 正弦：示波器 Vrms = A/√2，频率；运放振荡器频率 vs 2RC·ln3
+    s = Circuit("sin"); s.V("1", "x", "0", sin=(0.5, 2.0, 50e3)); s.R("1", "x", "0", 1e3)
+    w = s.tran(10e-9, 200e-6, tmax=10e-9); sc = Scope(); sc.load(w); sc.ch[0].source = "x"; sc.ch[0].on = True
+    sc.tdiv = 10e-6; sc.trig.level = 0.5; fr = sc.acquire(); mm = sc.measure(1, fr)
+    sc.ch[0].coupling = "AC"; sc.trig.level = 0.0; fr2 = sc.acquire(); ma = sc.measure(1, fr2)
+    print("  示波器(正弦 0.5+2sin)：Vpp %.4f（4）、Vavg %.4f（0.5）、Vrms DC耦合 %.4f（√(0.25+2)=1.5000）、AC耦合 %.4f（1.4142）、频率 %.2f Hz（50000）" % (
+        mm["Vpp"], mm["Vavg"], mm["Vrms"], ma["Vrms"], mm["频率"]))
+    e = CX.get("astable"); w = e.circuit.tran(**e.tran); m = w.x > w.x[-1] * 0.4
+    fo = measure(w.x[m], w["out"][m])["频率"]
+    print("运放振荡器：频率 理论 %.2f Hz / 仿真 %.2f Hz（误差 %+.2f%%；行为级运放压摆率 10 V/µs、输出 ±13 V）" % (e.values["f"], fo, pct(fo, e.values["f"])))
+    # 8f KiCad 网表导入：两种格式结果一致；集电极上升时间 ≈ 2.2·R2·C1
+    c1 = KI.load("models/netlists/npn_switch.cir"); c2 = KI.load("models/netlists/npn_switch_kicad.net")
+    w1 = c1.run(KI.default_analysis(c1)); w2 = c2.run(".tran 1u 5m")
+    r1, r2 = measure(w1.x, w1["/col"]), measure(w2.x, w2["/col"])
+    print("KiCad 导入：.cir 与 .net 集电极上升时间 %.4f / %.4f ms（理论 2.197·1k·100n = 0.2197 ms，%+.2f%%）；.net 未映射元件 %d 个（J1 连接器，预期）" % (
+        r1["上升时间"] * 1e3, r2["上升时间"] * 1e3, pct(r1["上升时间"], 2.197e-4), len(c2.warnings)))
+    e = CX.get("halfbridge"); w = e.circuit.tran(**e.tran); m = w.x > 0.6e-3
+    mi = measure(w.x[m], w["i(vcoil)"][m]); ms = measure(w.x[m], w["sw"][m])
+    print("半桥演示（只做冒烟检查，无解析对比）：开关频率 %.0f Hz（设定 40000），开关节点 %.1f~%.1f V，线圈电流 %.1f A 峰值 / %.1f A 有效值" % (
+        ms["频率"], ms["Vmin"], ms["Vmax"], mi["Vmax"], mi["Vrms"]))
