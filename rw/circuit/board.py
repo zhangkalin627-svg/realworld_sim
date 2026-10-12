@@ -24,6 +24,7 @@ def run_cir(path, workdir=None, params=None, timeout=200):
     cir = os.path.join(wd, "case.cir")
     open(cir, "w").write(txt)
     r = subprocess.run([exe, "-b", "case.cir"], cwd=wd, capture_output=True, text=True, timeout=timeout, env=_sp._env_for(exe))
+    _sp.check_exit(r, os.path.basename(path))   # 被杀/崩溃 → 明确报错，不解析残缺输出
     meas = {}
     for m in re.finditer(r"^([a-z0-9_]+)\s+=\s+(-?[0-9.]+(?:e[+-]?\d+)?)", r.stdout, re.M | re.I):
         meas[m.group(1).lower()] = float(m.group(2))
@@ -33,7 +34,10 @@ def run_cir(path, workdir=None, params=None, timeout=200):
         fn = os.path.join(wd, mw.group(1))
         names = mw.group(2).split()
         if os.path.exists(fn):
-            a = np.loadtxt(fn)
+            try:
+                a = np.loadtxt(fn)
+            except ValueError as e:
+                raise RuntimeError("ngspice 的 wrdata 文件残缺（%s）：%s" % (os.path.basename(path), e))
             for i, n in enumerate(names):
                 waves[n.lower()] = (a[:, 2 * i], a[:, 2 * i + 1])
     if not waves and not meas:
@@ -113,8 +117,9 @@ def thermal_response(t, p, th, hold_s=300.0, hold_frac=0.2, pend=None, burn=True
     保持段从 t_end 开始按几何间隔加密（第一步 = 窗口内的平均步长），Tj 在拼接处连续。
     稳态 Tj 若器件已烧毁（开路），稳态 = Ta。"""
     t, p = downsample(np.asarray(t, float), np.asarray(p, float))
+    p = np.maximum(p, 0.0)  # 器件耗散功率非负；负值（数值噪声/输入错）钳 0，避免 Tj<绝对零度
     tail = p[t >= t[-1] - hold_frac * (t[-1] - t[0])]
-    pend = float(np.mean(tail)) if pend is None else float(pend)
+    pend = float(np.mean(tail)) if pend is None else max(float(pend), 0.0)
     dt0 = max((t[-1] - t[0]) / max(len(t) - 1, 1), 1e-9)
     th_ = np.geomspace(dt0, max(hold_s - t[-1], 2 * dt0), 400)
     # 在 t_end 处放一个与末点同时刻的“切换点”（p 从窗口值切到保持值），之后都是 pend

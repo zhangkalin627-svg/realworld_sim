@@ -21,7 +21,7 @@ def parse_value(s):
     """'4k7' → 4700，'10u' → 1e-5，'2.2meg' → 2.2e6，'1e-3' → 0.001。认不出的返回 None。"""
     if isinstance(s, (int, float)):
         return float(s)
-    t = str(s).strip().lower().replace("Ω", "").replace("ohm", "")
+    t = str(s).strip().replace("Ω", "").replace("Ω", "").lower().replace("ω", "").replace("ohms", "").replace("ohm", "")
     m = re.fullmatch(r"([-+]?\d*\.?\d+(?:e[-+]?\d+)?)([a-zµ]*)", t)
     if m:
         num, suf = float(m.group(1)), m.group(2)
@@ -40,7 +40,7 @@ def fmt(v):
     """数值 → SPICE 文本。字符串原样输出（允许 '{par}'、'1k' 等）。"""
     if isinstance(v, str):
         return v
-    return "%.6g" % float(v)
+    return repr(float(v))   # v0.12：最短往返表示（原 %.6g 会把 5.0000015 截成 5、合并 PWL 相邻时间点）
 
 
 # ---------------------------------------------------------------- 元件
@@ -63,6 +63,10 @@ def _src_spec(dc=None, ac=None, pulse=None, sin=None, pwl=None):
     if ac is not None: parts.append(f"AC {fmt(ac)}")
     if pulse is not None: parts.append("PULSE(" + " ".join(fmt(x) for x in pulse) + ")")
     if sin is not None: parts.append("SIN(" + " ".join(fmt(x) for x in sin) + ")")
+    if pwl is not None:
+        ts = [float(x[0]) for x in pwl]
+        if any(b <= a for a, b in zip(ts, ts[1:])):
+            raise SpiceError("PWL 的时间点必须严格递增（出现重复或倒退：%s）" % ", ".join(fmt(t) for t in ts[:12]))
     if pwl is not None: parts.append("PWL(" + " ".join(fmt(x) for xy in pwl for x in xy) + ")")
     return " ".join(parts) or "DC 0"
 
@@ -190,6 +194,18 @@ def _env_for(exe):
         if os.path.isdir(lib):
             env["LD_LIBRARY_PATH"] = env.get("LD_LIBRARY_PATH", "") + ":" + lib
     return env
+
+
+def check_exit(p, what=""):
+    """ngspice 被信号终止（返回码 <0，或 shell 风格 ≥128，如 137=SIGKILL）= 结果残缺，直接报错，不再解析输出（v0.12：issue 1946）。
+    其他非零返回码（不收敛等）只返回描述，由调用方决定；返回 None 表示正常。"""
+    rc = p.returncode
+    tail = ((p.stderr or "") + (p.stdout or ""))[-300:].strip()
+    if rc is not None and (rc < 0 or rc >= 128):
+        sig = -rc if rc < 0 else rc - 128
+        raise SpiceError("ngspice 异常退出%s（返回码 %d，信号 %d%s，可能内存不足被系统终止）：%s"
+                         % ("（%s）" % what if what else "", rc, sig, " SIGKILL" if sig == 9 else "", tail))
+    return None if not rc else "返回码 %d" % rc
 
 
 def ngspice_version():
@@ -362,7 +378,11 @@ class Circuit(_Builder):
         return self
 
     def subckt(self, s):
-        self.subckts[s.name.upper()] = s.text() if isinstance(s, SubCircuit) else str(s)
+        if isinstance(s, SubCircuit):
+            self.subckts[s.name.upper()] = s.text()
+        else:  # v0.12：也接受 '.subckt NAME …' 文本
+            m = re.search(r"(?im)^\s*\.subckt\s+(\S+)", str(s))
+            self.subckts[(m.group(1) if m else "SUB%d" % len(self.subckts)).upper()] = str(s)
         return self
 
     def _auto_models(self):
@@ -379,7 +399,9 @@ class Circuit(_Builder):
         独立源 V/I（值不全是 DC 0）、行为源 B、带 IC= 的储能元件、.ic 都算激励；有 .include 时看不到里面，返回 None。"""
         found, zero_src = [], []
         lines = [e.line() for e in self.elements]
-        for sc in self.subckts.values():
+        for nm, sc in self.subckts.items():
+            if nm.upper() in getattr(self, "lib_subckts", ()):  # v0.12：器件库行为级子电路里的 B 源不算外部激励
+                continue
             lines += [l for l in str(sc).splitlines()[1:] if l.strip() and not l.strip().startswith(".")]
         for l in lines:
             f = l.split()
@@ -401,9 +423,65 @@ class Circuit(_Builder):
             found.append(".ic")
         if found:
             return True, "激励：" + ", ".join(found[:8])
-        if self.includes:
+        vend = {f for _r, _n, f in (getattr(self, "vendor_models", None) or [])}
+        if [p for p in self.includes if p.strip('"') not in vend]:  # v0.12：器件模型库不会带激励源
             return None, "网表本身没有独立源（.include 文件里可能有）"
         return False, "网表里没有任何独立源/激励" + ("（只有 0 V 电流表 %s）" % ", ".join(zero_src[:5]) if zero_src else "")
+
+    def topology_warnings(self):
+        """v0.12.1（问题单 1955 第 3 条）：静默给出 gmin 决定的值的拓扑隐患。
+        ① 节点没有直流通路到地（只经电容/电流源/受控电流源/控制端连接，例：电流源割集）；
+        ② 节点只接了一个元件脚（悬空）；③ 电阻值跨度 > 1e12（矩阵病态，精度可能只剩几位）。
+        网表里有 raw 行/ .include / X 子电路时拓扑看不全 → 只做 ③，不报①②，避免误报。"""
+        W = []
+        if any(not e.nodes for e in self.elements if e.kind != "K") or self.includes:
+            opaque = True
+        else:
+            opaque = any(e.kind == "X" for e in self.elements)
+        gnd = lambda n: n.lower() in ("0", "gnd")
+        if not opaque:
+            par, cnt = {}, {}
+            def f(x):
+                par.setdefault(x, x)
+                while par[x] != x:
+                    par[x] = par[par[x]]; x = par[x]
+                return x
+            def u(a, b): par[f(a.lower() if not gnd(a) else "0")] = f(b.lower() if not gnd(b) else "0")
+            for e in self.elements:
+                k, n = e.kind, e.nodes
+                if k == "K" or not n:
+                    continue
+                for x in n:
+                    nm = "0" if gnd(x) else x.lower()
+                    f(nm); cnt[nm] = cnt.get(nm, 0) + 1
+                if k in "RLVDSB" and len(n) >= 2:
+                    u(n[0], n[1])
+                elif k == "E" and len(n) >= 2:
+                    u(n[0], n[1])
+                elif k == "Q" and len(n) >= 3:
+                    u(n[0], n[1]); u(n[1], n[2])
+                elif k == "M" and len(n) >= 3:
+                    u(n[0], n[2])
+                    if len(n) >= 4:
+                        u(n[0], n[3])
+                # C、I、G：无直流通路；M 栅极、E/G/S 控制端：只感测，不构成通路
+            root0 = f("0")
+            bad = sorted(n for n in par if f(n) != root0)
+            if bad:
+                W.append("节点 %s 没有直流通路到地（只经电容/电流源/控制端连接）：op 与直流值由 gmin 决定，不可信；加一个大电阻到地或补上直流通路。"
+                         % ", ".join(bad[:8]) + (" 等 %d 个" % len(bad) if len(bad) > 8 else ""))
+            dang = sorted(n for n, c in cnt.items() if c == 1 and n != "0" and n not in bad)
+            if dang:
+                W.append("节点 %s 只接了一个元件脚（悬空）。" % ", ".join(dang[:8]) + (" 等 %d 个" % len(dang) if len(dang) > 8 else ""))
+        rs = []
+        for e in self.elements:
+            if e.kind == "R" and isinstance(e.value, str):
+                v = parse_value(e.value)
+                if v and v > 0:
+                    rs.append(v)
+        if len(rs) > 1 and max(rs) / min(rs) > 1e12:
+            W.append("电阻值跨度 %.0e（%.3g Ω ~ %.3g Ω）> 1e12：矩阵病态，结果相对误差可能到 1e-4 量级。" % (max(rs) / min(rs), min(rs), max(rs)))
+        return W
 
     def netlist(self, analysis, outfile=None, save=None):
         self._auto_models()
@@ -432,13 +510,25 @@ class Circuit(_Builder):
             net = self.netlist(analysis, raw, save)
             cir = os.path.join(d, "in.cir")
             open(cir, "w").write(net)
-            p = subprocess.run([exe, "-b", cir], capture_output=True, text=True, timeout=timeout, env=_env_for(exe), cwd=d)
+            sets = sorted(getattr(self, "extra_opts", ()) or ())
+            if sets:  # v0.12：如 ngbehavior=ltpsa（UnitedSiC 模型需要），只能在 .spiceinit 里 set
+                open(os.path.join(d, ".spiceinit"), "w").write("".join(f"set {s}\n" for s in sets))
+            try:
+                p = subprocess.run([exe, "-b", cir], capture_output=True, text=True, timeout=timeout, env=_env_for(exe), cwd=d)
+            except subprocess.TimeoutExpired:   # run() 已杀掉子进程，临时目录随 with 删除
+                raise SpiceError("ngspice 超过 %g s 仍未完成，已终止。瞬态步长太小或时间太长时点数会爆炸：加大 tmax/step 或缩短 tstop，"
+                                 "或把 timeout 调大。" % timeout)
+            check_exit(p, "Circuit.run")   # 被杀/崩溃 → 明确报错
             log = p.stdout + p.stderr
             if not os.path.exists(raw) or os.path.getsize(raw) < 50:
                 err = [l for l in log.splitlines() if "rror" in l or "fatal" in l.lower()]
                 raise SpiceError("ngspice 没算出结果：\n" + "\n".join(err[:15] or log.splitlines()[-15:]) + "\n\n--- netlist ---\n" + net)
             name, data, types = read_raw(raw)
         w = Waveforms(name, data, types, net, log)
+        try:
+            w.warnings.extend(self.topology_warnings())
+        except Exception:   # 告警本身绝不能让仿真失败
+            pass
         ok, why = self.excitation()
         if ok is False:
             w.warnings.append("无激励源，结果全零（%s）" % why)
@@ -449,7 +539,13 @@ class Circuit(_Builder):
         return w
 
     # 常用分析
+    MAX_POINTS = 5e7   # 保存的时间点数上限（约 100 B/点 → 5 GB）；超过就拒绝，提示加大 tmax
+
     def tran(self, step, stop, start=0.0, tmax=None, uic=False, **kw):
+        h = float(tmax if tmax else step)
+        npts = (parse_value(stop) - (parse_value(start) or 0.0)) / max(parse_value(h) or h, 1e-30) if parse_value(stop) is not None else 0
+        if npts > self.MAX_POINTS:
+            raise SpiceError("瞬态约需 %.2g 个时间点（上限 %.0e，约 100 B/点会吃光内存）：加大 tmax/step、缩短 tstop，或改用 .save 只存少数节点。" % (npts, self.MAX_POINTS))
         a = f".tran {fmt(step)} {fmt(stop)} {fmt(start)} {fmt(tmax if tmax else step)}" + (" uic" if uic else "")
         return self.run(a, **kw)
 

@@ -120,8 +120,29 @@ def run():
         "nets=%s" % wv.nets())
     sc = Scope(); sc.load(wv); sc.ch[0].source = "Out"; sc.ch[0].on = True
     chk("6 示波器用混合大小写取外部波形", sc.raw(1) is not None and len(sc.raw(1)) == 101)
+    # 1945 边界输入回归
+    from rw.circuit import board as _B
+    from rw.circuit.scope import Scope as _S
+    _th = _B.Thermal(ta=40.0); _t = np.linspace(0, 1e-3, 101)
+    chk("1945-1 负功耗 Tj 不低于 Ta", _B.thermal_response(_t, np.full(101, -5.0), _th)[3] >= 40.0 - 1e-9)
+    _sc = _S(); _tt = np.linspace(0, 1e-2, 1001); _sc.load({"time": _tt, "out": np.sin(_tt)})
+    _sc.ch[0].source = "nonexist"; _sc.ch[0].on = True; _sc.tdiv = 0
+    try:
+        _fr = _sc.acquire(); _okk = _sc.tdiv > 0 and 1 not in _fr["traces"]
+    except Exception:
+        _okk = False
+    chk("1945-2/3 示波器不存在网络/tdiv=0 不崩", _okk)
     print("  v0.11.1 电路导入回归：%d/%d 通过" % (sum(ok_all), len(ok_all)))
+    # v0.12：器件库 / 导入器 / 应力校核（validate_circuit_v012.py）
+    import sys
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import validate_circuit_v012 as V12
+    ok12 = V12.run()
+    assert ok12, "v0.12 器件库/导入器自检有失败项"
 
 
 if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, HERE)
     run()
