@@ -1,0 +1,27 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f6f8; color: #222; }
+header { background: #1a2332; color: #fff; padding: 12px 20px; display: flex; align-items: baseline; gap: 12px; }
+header h1 { font-size: 18px; margin: 0; }
+header .tag { font-size: 12px; color: #9fb3c8; }
+nav { background: #24344d; padding: 0 12px; }
+nav button { background: none; border: none; color: #c8d6e5; padding: 10px 16px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+nav button.on { color: #fff; border-bottom-color: #4da3ff; }
+main { display: flex; gap: 16px; padding: 16px 20px; align-items: flex-start; flex-wrap: wrap; }
+section { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+#formpane { width: 340px; flex: none; }
+#outpane { flex: 1; min-width: 420px; }
+h2 { font-size: 16px; margin: 0 0 4px; }
+.muted { color: #777; font-size: 13px; }
+fieldset { border: 1px solid #e3e6ea; border-radius: 6px; margin: 10px 0; padding: 8px 10px; }
+legend { font-size: 12px; color: #666; }
+label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 6px 0; gap: 8px; }
+label input[type=number], label select { width: 150px; padding: 4px 6px; border: 1px solid #ccd2d9; border-radius: 4px; }
+label.ck { justify-content: flex-start; }
+#runbtn { width: 100%; padding: 9px; font-size: 15px; background: #2f6fed; color: #fff; border: none; border-radius: 6px; cursor: pointer; margin-top: 8px; }
+#runbtn:disabled { background: #9db8e8; }
+#bar { height: 6px; background: #e8ebef; border-radius: 3px; margin-top: 10px; overflow: hidden; display: none; }
+#barfill { height: 100%; width: 0; background: #2f6fed; transition: width .3s; }
+#lines { margin: 10px 0; font-size: 14px; line-height: 1.9; white-space: pre-wrap; }
+#warns div { background: #fff4e5; border-left: 3px solid #f0a030; padding: 6px 10px; margin: 6px 0; font-size: 13px; border-radius: 4px; }
+#plots svg { max-width: 48%; height: auto; margin: 6px 1%; border: 1px solid #eee; border-radius: 6px; }
+.err { color: #b00; font-size: 12px; white-space: pre-wrap; }
