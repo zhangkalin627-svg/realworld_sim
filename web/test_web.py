@@ -152,6 +152,9 @@ assert j["status"] == "error" and "熔点" in j["error"] or "固相线" in j["er
 assert "Traceback" not in j["error"] and "/home" not in j["error"] and "web/" not in j["error"], j["error"][:200]
 j = run_wait("plc", {"program": "LD X000\nOUT Y000"})
 assert j["status"] == "error" and "END" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
+# 豆包反馈：未知指令要带行号
+j = run_wait("plc", {"program": "LD X000\nFOO X001\nEND"})
+assert j["status"] == "error" and "第2行" in j["error"] and "FOO" in j["error"], j.get("error", "?")[:200]
 print(f"[web-j] 两封反馈修复回归 OK ({time.time()-t0:.0f}s): NaN文本/400校验/越界收口/不可达温度快速失败/错误不泄堆栈")
 
 # [web-k] 电路模块：无 ngspice 的服务器必须给友好报错（沙箱即此情形）
