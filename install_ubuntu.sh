@@ -9,4 +9,6 @@ cd "$(dirname "$0")"
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
+# v0.7 可选：ARM Cortex-M 核心用 unicorn（引擎 GPLv2，外部依赖）。不装也能用其它全部功能。
+if [ "$1" = "--with-unicorn" ]; then .venv/bin/pip install unicorn; fi
 echo "安装完成。运行： ./run.sh"

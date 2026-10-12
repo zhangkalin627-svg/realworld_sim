@@ -250,6 +250,8 @@ class CircuitPage(QtWidgets.QWidget):
 
     def load_choice(self, *_):
         kind, val = self.pick.currentData()
+        if kind == "ext":          # 外部送来的波形（例如 ⑦ 单片机/PLC 联合仿真），没有电路可仿真
+            self.circuit = None; return
         if kind == "ex":
             e = EX.get(val)
             self.example, self.circuit = e, e.circuit

@@ -149,3 +149,9 @@ else:
         ms["频率"], ms["Vmin"], ms["Vmax"], mi["Vmax"], mi["Vrms"]))
 
 
+# 9) v0.7 单片机仿真接 PLC：指令计时、定时器、PWM、ADC、UART、PLC↔MCU 握手、过流保护（理论 vs 仿真）
+print("\n=== 9) 单片机（AVR 子集）+ FX PLC + 电路 联合仿真 ===")
+from rw.mcu import selftest as _mcu_st
+_mcu_st.run()
+
+

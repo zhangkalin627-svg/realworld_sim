@@ -1,4 +1,4 @@
-"""真实的世界 v0.6：感应加热淬火 + 结构校核 + PLC 虚拟调试 + 物理沙盒 + 材料库 + 电路/示波器（桌面程序）
+"""真实的世界 v0.7：感应加热淬火 + 结构校核 + PLC 虚拟调试 + 物理沙盒 + 材料库 + 电路/示波器 + 单片机/PLC 联合仿真（桌面程序）
 运行:  python3 app.py
 """
 import sys, warnings, traceback
@@ -181,7 +181,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.6")
+        self.setWindowTitle("真实的世界 v0.7")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -210,6 +210,16 @@ class MainWindow(QtWidgets.QMainWindow):
         from rw.gui_circuit import CircuitPage
         self.circ = CircuitPage()
         self.top.addTab(self.circ, "⑥ 电路/示波器")
+        from rw.gui_mcu import MCUPage
+
+        def _to_scope():
+            ct = getattr(self, "circ_tabs", None)
+            if ct is not None and self.top.indexOf(ct) >= 0:
+                self.top.setCurrentWidget(ct); ct.setCurrentWidget(self.circ)
+            else:
+                self.top.setCurrentWidget(self.circ)
+        self.mcu = MCUPage(self.circ, _to_scope)
+        self.top.addTab(self.mcu, "⑦ 单片机/PLC")
         self.setCentralWidget(self.top)
 
 
@@ -269,6 +279,29 @@ def main():
             poll.timeout.connect(check)
             poll.start(300)
             QtCore.QTimer.singleShot(60000, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("mcu"):
+            # mcu0 全程时序 + 汇编源码 + MCU 引脚；mcu1 PLC 报警联锁 + 梯形图/IO；mcu2 过流段送进 ⑥ 示波器
+            w.top.setCurrentWidget(w.mcu)
+            pg = w.mcu
+            sub = int(which[3:]) if which[3:].isdigit() else 0
+            pg.simulate()
+            poll = QtCore.QTimer(w)
+
+            def after():
+                if sub == 0:
+                    pg.view.setCurrentIndex(0); pg.slider.setValue(95); pg.rt.setCurrentIndex(0)
+                elif sub == 1:
+                    pg.view.setCurrentIndex(4); pg.slider.setValue(800); pg.rt.setCurrentIndex(1); pg.src_tabs.setCurrentIndex(1)
+                else:
+                    pg.view.setCurrentIndex(3); pg.send_scope()
+                QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
+
+            def check():
+                if pg.btn.isEnabled() and pg.cs is not None:
+                    poll.stop(); after()
+            poll.timeout.connect(check)
+            poll.start(300)
+            QtCore.QTimer.singleShot(90000, lambda: (w.grab().save(out), app.quit()))
         elif which == "plcdemo":
             w.top.setCurrentIndex(2); w.plc_tabs.setCurrentWidget(w.plc_demo)
             w.plc_demo.load(); w.plc_demo.spd.setCurrentIndex(2)
