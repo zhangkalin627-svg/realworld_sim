@@ -84,6 +84,23 @@ function renderResult(j) {
   $('#bar').style.display = 'none';
   if (j.status === 'error' || j.status === 'interrupted') {
     $('#status').innerHTML = `<span class="err">${j.status === 'interrupted' ? '任务被服务器重启中断（参数已保留，可重新提交）' : '出错了：'}\n${esc(j.error || '')}</span>`;
+    if (j.has_checkpoint) {
+      const b = document.createElement('button');
+      b.textContent = '⏩ 从断点续算';
+      b.style.marginTop = '8px';
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = '续算提交中 …';
+        const r = await (await fetch(`/api/sim/${j.module}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({params: {...j.params, resume_from: j.id}})
+        })).json();
+        $('#status').textContent = '仿真进行中（断点续算）…';
+        $('#bar').style.display = 'block';
+        poll(r.job);
+      };
+      $('#status').appendChild(document.createElement('br'));
+      $('#status').appendChild(b);
+    }
     return;
   }
   const r = j.result;
