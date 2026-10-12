@@ -181,7 +181,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.7")
+        self.setWindowTitle("真实的世界 v0.8")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -220,6 +220,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.top.setCurrentWidget(self.circ)
         self.mcu = MCUPage(self.circ, _to_scope)
         self.top.addTab(self.mcu, "⑦ 单片机/PLC")
+        from rw.gui_machine import MachinePage
+        self.machine = MachinePage()
+        self.top.addTab(self.machine, "⑧ 整机联动")
         self.setCentralWidget(self.top)
 
 
@@ -279,6 +282,22 @@ def main():
             poll.timeout.connect(check)
             poll.start(300)
             QtCore.QTimer.singleShot(60000, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("mach"):
+            # mach0 正常上电+5 件；mach1 缺水联锁被短接→线圈烧；mach2 长时间运行无换热器；mach3 预充电太短
+            w.top.setCurrentWidget(w.machine)
+            pg = w.machine
+            sub = int(which[4:]) if which[4:].isdigit() else 0
+            key = {0: "normal", 1: "water_loss_bypassed", 2: "longrun_no_hex", 3: "precharge_short", 4: "mains_sag"}.get(sub, "normal")
+            pg.sel.setCurrentIndex(pg.sel.findData(key))
+            pg.simulate()
+            poll = QtCore.QTimer(w)
+
+            def check():
+                if pg.btn.isEnabled() and pg.m is not None:
+                    poll.stop(); QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
+            poll.timeout.connect(check)
+            poll.start(300)
+            QtCore.QTimer.singleShot(90000, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("mcu"):
             # mcu0 全程时序 + 汇编源码 + MCU 引脚；mcu1 PLC 报警联锁 + 梯形图/IO；mcu2 过流段送进 ⑥ 示波器
             w.top.setCurrentWidget(w.mcu)

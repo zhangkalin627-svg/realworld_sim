@@ -155,3 +155,15 @@ from rw.mcu import selftest as _mcu_st
 _mcu_st.run()
 
 
+# 10) v0.8 整机联动：上电 → PLC → 变频器 → 主回路 → 机械 → 加热 → 喷淋（理论/ngspice 对比 + 能量守恒 + 故障传播）
+print("\n=== 10) 整机联动 ===")
+from rw.machine import selftest as _mach_st
+_mach_st.run()
+
+
+# 10) v0.8 整机联动：上电 → PLC → 变频器 → 主回路 → 机械 → 加热 → 喷淋（理论/ngspice 对比 + 能量守恒 + 故障传播）
+print("\n=== 10) 整机联动 ===")
+from rw.machine import selftest as _mach_st
+_mach_st.run()
+
+
