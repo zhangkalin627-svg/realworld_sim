@@ -1,0 +1,4 @@
+# Web 版 (云端化) 额外依赖；基础依赖见 requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27          # 仅测试用 (TestClient)

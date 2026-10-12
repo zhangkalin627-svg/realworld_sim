@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>真实的世界 · Web 版</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>真实的世界 · RealWorld Sim</h1>
+  <span class="tag">Web 版 v0.16（第一阶段：感应淬火 + 材料库）</span>
+</header>
+<nav id="modtabs"></nav>
+<main>
+  <section id="formpane"><h2 id="mtitle"></h2><p id="mdesc" class="muted"></p>
+    <form id="pform"></form>
+    <button id="runbtn" type="button">▶ 开始仿真</button>
+    <div id="bar"><div id="barfill"></div></div>
+  </section>
+  <section id="outpane">
+    <div id="status" class="muted">选择模块，填参数，开始仿真。物理内核与桌面版完全一致（rw 包），结果经 §11/§12 定量自检。</div>
+    <div id="lines"></div>
+    <div id="warns"></div>
+    <div id="plots"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
