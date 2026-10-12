@@ -66,10 +66,22 @@ def run_induction(params, progress, checkpoint=None, resume=None):
               medium=params.get("medium", "water_spray"),
               mur_cold=f("mur_cold", 20.0), nonlinear=bool(params.get("nonlinear", False)),
               accel=params.get("speed", "accurate") == "fast")
+    # 入参校验（豆包巡检 P1-1/P1-2：直接调 runner 时无 server schema 防线）
+    from rw import materials as _M
+    from rw.em.bh import FLUX_MATERIALS as _FM
+    for k, lo, hi in (("t_heat", 0.01, 600), ("t_quench", 0.0, 600), ("t_air", 0.0, 600),
+                      ("target", 100.0, 1600.0), ("power_kw", 0.0, 500.0), ("mur_cold", 1.0, 500.0),
+                      ("freq", 0.1, 1000.0)):
+        if k in params and not (lo <= f(k, 0.0) <= hi):
+            raise ValueError(f"感应淬火参数 {k}={params[k]!r} 超出范围 [{lo}, {hi}]")
+    if kw["medium"] not in _M.QUENCHANTS:
+        raise ValueError(f"未知淬火介质 {kw['medium']!r}（可选：{', '.join(_M.QUENCHANTS)}）")
     ck = params.get("conc")
     if ck:
+        if str(ck).lower() not in _FM:
+            raise ValueError(f"未知导磁体材料 {ck!r}（可选：{', '.join(_FM)}）")
         from rw.em.conc import Concentrator
-        kw["conc"] = Concentrator(ck)
+        kw["conc"] = Concentrator(str(ck).lower())
     if params.get("mode", "target") == "target":
         target = f("target", 900.0)
         progress(0.02)
@@ -103,7 +115,7 @@ def run_induction(params, progress, checkpoint=None, resume=None):
 def _ind_fingerprint(params):
     """断点续算参数指纹：几何/频率/功率/时间/介质任一变化都不能沿用旧检查点。"""
     keys = ("neck_od", "wall", "neck_len", "zone", "coil_id", "coil_h", "freq", "mode", "target",
-            "power_kw", "t_heat", "t_quench", "medium", "mur_cold", "nonlinear")
+            "power_kw", "t_heat", "t_quench", "t_air", "medium", "mur_cold", "nonlinear", "speed", "conc")
     return "|".join(str(params.get(k)) for k in keys)
 
 
@@ -193,6 +205,9 @@ MODULES = [
          {"name": "medium", "label": "淬火介质", "type": "select", "default": "water_spray",
           "options": [{"v": "water_spray", "t": "清水喷淋"}, {"v": "polymer_spray", "t": "聚合物喷淋"}, {"v": "water_dip", "t": "清水浸入"}, {"v": "oil_dip", "t": "油浸"}, {"v": "air", "t": "空冷"}]},
          {"name": "t_quench", "label": "淬火时间 s", "type": "number", "default": 3, "min": 0.1, "max": 60, "step": 0.1},
+         {"name": "t_air", "label": "空冷时间 s", "type": "number", "default": 6, "min": 0, "max": 600, "step": 1},
+         {"name": "conc", "label": "导磁体", "type": "select", "default": "",
+          "options": [{"v": "", "t": "无"}, {"v": "smc", "t": "smc"}, {"v": "sife", "t": "sife"}, {"v": "ferrite", "t": "ferrite"}]},
      ],
      "run": run_induction, "ckpt": True},
     {"key": "materials", "name": "材料库", "desc": "45 钢关键相变点 + 淬火介质换热参数（只读查询）",

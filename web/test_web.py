@@ -213,4 +213,32 @@ assert abs(fast["HRC_surface"] - acc["HRC_surface"]) < 0.3
 assert abs(fast["t85_surface"] - acc["t85_surface"]) < 0.05
 print(f"[web-m] 加速档 OK ({time.time()-t1:.0f}s): fast vs 精确 硬化层差<0.03mm/HRC差<0.3/t85差<0.05s")
 
+# [web-n] 豆包巡检回归：t_air 负值/超大值、非法 conc、非法 medium 友好拦截；续算指纹含 speed/t_air/conc
+t1 = time.time()
+from web.modules import run_induction as _ri
+for bad, msg in (({"mode": "power", "power_kw": 6, "t_heat": 1, "t_quench": 1, "t_air": -5}, "超出范围"),
+                 ({"mode": "power", "power_kw": 6, "t_heat": 1, "t_quench": 1, "t_air": 1, "conc": "12345"}, "未知导磁体"),
+                 ({"mode": "power", "power_kw": 6, "t_heat": 1, "t_quench": 1, "t_air": 1, "medium": "lava"}, "未知淬火介质")):
+    try:
+        _ri(bad, lambda f: None)
+        raise SystemExit(f"应拦截的入参未拦截: {bad}")
+    except ValueError as e:
+        assert msg in str(e) and "Traceback" not in str(e), str(e)[:200]
+# API 层：负 t_air 收口到 0、非法 medium 400
+_v2 = _validate_params(_mod, {"t_air": -5})
+assert _v2["t_air"] == 0, f"负 t_air 未收口: {_v2['t_air']}"
+r = c.post("/api/sim/induction", json={"params": {"mode": "power", "power_kw": 6, "t_heat": 1, "t_quench": 1, "medium": "lava"}})
+assert r.status_code == 400 and "不在可选范围" in r.json()["detail"], r.text[:200]
+# t_air=1e4 应被 schema 收口到 600（不再无界拉长）
+from web.server import _validate_params
+_mod = next(m for m in c.get("/api/modules").json() if m["key"] == "induction")
+_v = _validate_params(_mod, {"t_air": 10000, "t_heat": 1, "t_quench": 1})
+assert _v["t_air"] == 600, f"超大 t_air 未收口: {_v['t_air']}"
+import web.modules as _wm
+p1 = {"mode": "power", "power_kw": 6, "t_heat": 1, "t_quench": 1, "t_air": 1}
+p2 = dict(p1, speed="fast"); p3 = dict(p1, t_air=2); p4 = dict(p1, conc="smc")
+fp = _wm._ind_fingerprint
+assert fp(p1) != fp(p2) and fp(p1) != fp(p3) and fp(p1) != fp(p4), "指纹必须区分 speed/t_air/conc"
+print(f"[web-n] 豆包巡检回归 OK ({time.time()-t1:.0f}s): t_air负值/非法conc/非法medium友好拦截、超大t_air收口、指纹含speed/t_air/conc")
+
 print("web 冒烟测试全部通过")
