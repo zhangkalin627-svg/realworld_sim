@@ -1,5 +1,10 @@
 # 更新记录
 
+## v0.6.1 （2026-10-12）
+- 新增通用的“电路板案例批处理 + 器件热模型”`rw/circuit/board.py`：ngspice 批处理（模板参数替换）、解析 .meas 与波形、P(t)=V·I，
+  两级 Foster 热网络（Tj(t)、稳态 Tj=Ta+P·Rth）、判定（正常/警告/超 Tj max/峰值电流超 IFSM）。热时间常数是假设值，已在代码里注明
+- 私有板子的案例数据放在 models/private_boards/（不公开）
+
 ## v0.6 （2026-10-12）
 - 新增 ⑥ 电路/示波器：用 ngspice（BSD-3，外部程序）做瞬态/交流/直流仿真；自己写的 MIT 薄封装 `rw/circuit/spice.py`
   （Python 搭电路 → netlist → `ngspice -b` → 读 raw 文件），不依赖 PySpice
