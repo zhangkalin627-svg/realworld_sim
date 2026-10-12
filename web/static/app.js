@@ -80,6 +80,13 @@ function poll(jid) {
     $('#lines').textContent = r.lines.join('\n');
     $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${w}</div>`).join('');
     $('#plots').innerHTML = (r.plots || []).map(p => p.svg).join('');
+    if (r.viewer) {
+      const vd = document.createElement('div'); vd.id = 'v3d';
+      $('#plots').appendChild(vd);
+      import('/viewer3d.js').then(m => m.show(vd, r.viewer)).catch(e => {
+        vd.innerHTML = '<span class="err">3D 查看器加载失败: ' + e + '</span>';
+      });
+    }
   }, 700);
 }
 
