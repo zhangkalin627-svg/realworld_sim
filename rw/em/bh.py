@@ -102,9 +102,17 @@ class FluxMaterial:
     ⚠ 下面三种是"典型量级"预设，不是某个牌号的数据；请按供应商数据表改。
     """
 
-    def __init__(self, name, mu_i, Js, Hc, d, rho, note=""):
-        self.name, self.Hc, self.d, self.rho, self.note = name, Hc, d, rho, note
-        self.curve = BHCurve(name, Js0=Js, mu_i=mu_i, Tc=np.inf)
+    def __init__(self, name, mu_i, Js, Hc, d, rho, note="", Tc=np.inf, beta=0.5):
+        """Tc: 居里点 °C (默认 inf = 不随温度变, 与旧行为一致); beta: Js(T) 临界指数。
+        Tc 有限时 Js(T)=Js20·((1−T/Tc)/(1−20/Tc))^β (开氏), T≥Tc 变顺磁 (μr=1, 损耗机制消失)。"""
+        self.name, self.Hc, self.d, self.rho, self.note, self.Tc = name, Hc, d, rho, note, Tc
+        self.curve = BHCurve(name, Js0=Js, mu_i=mu_i, Tc=Tc, beta=beta)
+
+    def loss_scale(self, T):
+        """损耗随温度的缩放 Js(T)/Js(20 °C): 磁滞/涡流机制随饱和磁化消失 (⚠ 假设: 与 Js 同比例); Tc=inf → 1"""
+        if not np.isfinite(self.Tc):
+            return 1.0
+        return float(self.curve.Js(T) / self.curve.Js(20.0))
 
     def loss_density(self, B, f):
         B = np.asarray(B, float)
@@ -119,5 +127,6 @@ FLUX_MATERIALS = {
     "smc": FluxMaterial("软磁复合材料 SMC (绝缘铁粉压制)", mu_i=25.0, Js=1.4, Hc=250.0, d=0.15e-3, rho=1e-4,
                         note="μ 低但各向同性、损耗随 f 增长较慢，几 kHz~几百 kHz 常用"),
     "ferrite": FluxMaterial("MnZn 铁氧体", mu_i=1500.0, Js=0.45, Hc=15.0, d=0.2e-3, rho=1.0,
-                            note="μ 高、几乎无涡流，但 Bs 只有 0.4–0.5 T，感应加热强场下立刻饱和，且居里点低(~200°C)易碎"),
+                            note="μ 高、几乎无涡流，但 Bs 只有 0.4–0.5 T，感应加热强场下立刻饱和，且居里点低(~200°C)易碎",
+                         Tc=200.0),
 }

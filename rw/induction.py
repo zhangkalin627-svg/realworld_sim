@@ -75,7 +75,8 @@ def _graded(a, b, h_a, h_b, growth=1.15):
     return np.unique(np.concatenate([pts_l, pts_r[::-1]]))
 
 
-def build_mesh(g: BottleNeckGeometry, h_skin=0.04, conc=None):
+def build_mesh(g: BottleNeckGeometry, h_skin=0.04, conc=None, extra=None):
+    """extra=(r_lines_mm, z_lines_mm): 额外网格线(辅助体/线圈趋肤层加密用)，并入张量网格。"""
     ri, ro = g.ri, g.ro
     if conc is None:
         r_out = [_graded(g.coil_r1, g.Rb, 0.6, 0.5), _graded(g.Rb, 90.0, 0.5, 8.0, 1.25)]
@@ -107,6 +108,9 @@ def build_mesh(g: BottleNeckGeometry, h_skin=0.04, conc=None):
         _graded(-80.0, -g.Ls, 8.0, 0.5, 1.25),
         *z_mid, *z_top,
     ])
+    if extra is not None:
+        r = np.concatenate([r, np.asarray(extra[0], float)])
+        z = np.concatenate([z, np.asarray(extra[1], float)])
     r = np.unique(np.round(r, 6))
     z = np.unique(np.round(z, 6))
     m = MeshTri.init_tensor(r, z)
@@ -155,12 +159,50 @@ def _h_lin(v, w):
     return w["h"] * w["Tinf"] * v * w.x[0]
 
 
+# ------------------------------------------------------------------ 输入检查
+def _check_inputs(freq, power_kw, t_heat, t_delay, t_quench, t_air, inner_quench, mur_cold, T0, dt,
+                  em_every, medium):
+    """物理上非法的参数在入口处抛 ValueError（中文说明），GUI 捕获后提示。
+    （问题单 20261012-1925-em-input-validation）"""
+    def num(name, v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} 必须是数值，收到 {v!r}")
+        if not np.isfinite(v):
+            raise ValueError(f"{name} 必须是有限数值，收到 {v}")
+        return v
+    if num("频率 freq (Hz)", freq) <= 0:
+        raise ValueError(f"频率 freq 必须 > 0 Hz，收到 {freq}")
+    if num("功率 power_kw (kW)", power_kw) < 0:
+        raise ValueError(f"功率 power_kw 不能为负，收到 {power_kw}")
+    for n, v in (("加热时间 t_heat", t_heat), ("延时 t_delay", t_delay),
+                 ("淬火时间 t_quench", t_quench), ("空冷时间 t_air", t_air)):
+        if num(n + " (s)", v) < 0:
+            raise ValueError(f"{n} 不能为负，收到 {v}")
+    if num("时间步 dt (s)", dt) <= 0:
+        raise ValueError(f"时间步 dt 必须 > 0 s，收到 {dt}")
+    if num("电磁更新间隔 em_every (s)", em_every) <= 0:
+        raise ValueError(f"电磁更新间隔 em_every 必须 > 0 s，收到 {em_every}")
+    if num("冷态相对磁导率 mur_cold", mur_cold) < 1:
+        raise ValueError(f"冷态相对磁导率 mur_cold 必须 ≥ 1，收到 {mur_cold}")
+    if not (-60.0 <= num("初始温度 T0 (°C)", T0) <= 700.0):
+        raise ValueError(f"初始温度 T0 应在 -60…700 °C 之间，收到 {T0}")
+    if not (0.0 <= num("内孔淬火比例 inner_quench", inner_quench) <= 1.0):
+        raise ValueError(f"内孔淬火比例 inner_quench 应在 0…1 之间，收到 {inner_quench}")
+    if medium not in M.QUENCHANTS:
+        raise ValueError(f"未知淬火介质 {medium!r}，可选: {', '.join(M.QUENCHANTS)}")
+
+
 # ------------------------------------------------------------------ 主求解器
 class InductionQuenchSim:
     def __init__(self, geom=None, freq=30e3, power_kw=9.0, t_heat=3.0, t_delay=0.0,
                  medium="water_spray", t_quench=3.0, t_air=6.0, inner_quench=0.0,
                  mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False, accel=False,
-                 nonlinear=False, bh=None, conc=None, *, dT_em=25.0):
+                 nonlinear=False, bh=None, conc=None, *, dT_em=25.0, aux=None, mesh_extra=None):
+        _check_inputs(freq=freq, power_kw=power_kw, t_heat=t_heat, t_delay=t_delay, t_quench=t_quench,
+                      t_air=t_air, inner_quench=inner_quench, mur_cold=mur_cold, T0=T0, dt=dt,
+                      em_every=em_every, medium=medium)
         self.g = geom or BottleNeckGeometry()
         self.f = freq
         self.P = power_kw * 1e3
@@ -182,8 +224,12 @@ class InductionQuenchSim:
         from .em.bh import STEEL45_BH
         self.bh = bh or STEEL45_BH
         self.conc = conc                    # rw.em.conc.Concentrator 或 None
+        self.aux = list(aux) if aux else []  # rw.em.aux.AuxBody 列表: 夹具/屏蔽套等被杂散场加热的金属
+        self.mesh_extra = mesh_extra
+        self.aux_loss_W = 0.0
         self._mur_state = None
         self.conc_loss_W = 0.0
+        self.conc_T = 20.0                  # 导磁体均匀温度 °C (影响 Tc 有限的材料, 如铁氧体居里点); 默认 20 = 旧行为
         # v0.27.2 默认放宽到 0.048（4x）：缪斯 6 工况包线验证（5k-100kHz × 3-9kW）精度零代价、省时 15-39%
         self.em_tol = 0.048
         # v0.28 符号组装热步：None=未构建, False=不可用(回退通用 asm), dict=就绪
@@ -203,7 +249,13 @@ class InductionQuenchSim:
     # -------------------------------------------------------------- setup
     def _setup(self, h_skin):
         g = self.g
-        mm = build_mesh(g, h_skin, self.conc)
+        ex_r, ex_z = [], []
+        for a in self.aux:
+            lr, lz = a.mesh_lines(self.f)
+            ex_r += lr; ex_z += lz
+        if self.mesh_extra is not None:
+            ex_r += list(self.mesh_extra[0]); ex_z += list(self.mesh_extra[1])
+        mm = build_mesh(g, h_skin, self.conc, (ex_r, ex_z) if (ex_r or ex_z) else None)
         self.mesh_mm = mm
         m = MeshTri(mm.p * 1e-3, mm.t)          # 计算用 SI 单位 (m)
         self.mesh = m
@@ -211,6 +263,17 @@ class InductionQuenchSim:
         self.steel_el = g.is_steel(c[0], c[1])
         self.coil_el = g.is_coil(c[0], c[1])
         self.conc_el = self.conc.mask(g, c[0], c[1]) if self.conc is not None else np.zeros_like(self.coil_el)
+        self.aux_el = np.zeros_like(self.coil_el)
+        self.aux_idx = []
+        for a in self.aux:
+            m_a = a.mask(c[0], c[1])
+            self.aux_idx.append(m_a)
+            self.aux_el |= m_a
+        if self.aux_el.any() and (self.aux_el & (self.coil_el | self.steel_el | self.conc_el)).any():
+            raise ValueError("辅助体与线圈/工件/导磁体重叠，请调整位置")
+        for a in self.aux:
+            if a.r1 > 85.0 or a.z0 < -75.0 or a.z1 > 145.0:
+                raise ValueError("辅助体超出计算域 (r<85 mm, -75<z<145 mm)")
         self.basis = Basis(m, ElementTriP1())
         self.b0 = self.basis.with_element(ElementTriP0())
         # Dirichlet: 轴线 r=0 和外边界 A=0
@@ -261,12 +324,18 @@ class InductionQuenchSim:
         T_el = np.full(self.mesh.t.shape[1], self.T0)
         T_el[self.steel_idx] = T_th[self.th_mesh.t].mean(axis=0)
         sig = np.where(self.steel_el, M.steel_sigma(T_el), 0.0)
+        for a, m_a in zip(self.aux, self.aux_idx):
+            sig[m_a] = a.sigma
+        self._sig_el = sig
         w = 2 * np.pi * self.f
         areas = self._el_area_r()
         if not self.nonlinear and self.conc is None:
             mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
+            for a, m_a in zip(self.aux, self.aux_idx):
+                mur[m_a] = a.mur
             x, I_coil, P1 = self._em_solve(mur, sig, w)
             self.n_iter_em = 1
+            self._mur_el = mur
         else:
             mur = self._init_mur(T_el)
             act = self.steel_el | self.conc_el
@@ -280,7 +349,7 @@ class InductionQuenchSim:
                     new[m] = self.bh.mur_from_B1(B1[m], T_el[m])
                 if self.conc is not None:
                     m = self.conc_el
-                    new[m] = self.conc.mat.curve.mur_from_B1(B1[m], 20.0)
+                    new[m] = self.conc.mat.curve.mur_from_B1(B1[m], self.conc_T)
                 chg = np.abs(np.log(new / mur))
                 chg = chg[(B1 > 0.02) & act]
                 dmax = float(chg.max()) if chg.size else 0.0
@@ -307,11 +376,16 @@ class InductionQuenchSim:
             self._mur_el = mur
             if self.conc is not None:
                 pv, _, _ = self.conc.mat.loss_density(B1, self.f)
+                pv = pv * self.conc.mat.loss_scale(self.conc_T)
                 self.conc_pv = np.where(self.conc_el, pv, 0.0)
                 self.conc_loss_W = float(np.sum(self.conc_pv * areas * 2 * np.pi))
         a_el = np.abs(x[self.mesh.t]) ** 2
         q_el = 0.5 * sig * w**2 * a_el.mean(axis=0)
         q = q_el[self.steel_idx] * I_coil**2
+        if self.aux:
+            self.aux_q_el = np.where(self.aux_el, q_el * I_coil**2, 0.0)
+            self.aux_loss_W = float(np.sum(self.aux_q_el * areas * 2 * np.pi))
+            self.aux_loss_each_W = [float(np.sum(self.aux_q_el[m_a] * areas[m_a] * 2 * np.pi)) for m_a in self.aux_idx]
         self._last_A = x * I_coil
         return q, I_coil
 
@@ -326,6 +400,8 @@ class InductionQuenchSim:
                 mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
             if self.conc is not None:
                 mur[self.conc_el] = self.conc.mat.curve.mu_i * 0.2
+            for a, m_a in zip(self.aux, self.aux_idx):
+                mur[m_a] = a.mur
         if self.nonlinear:   # 超过居里点必为 1
             hot = self.steel_el & (T_el >= self.bh.Tc)
             mur[hot] = 1.0
@@ -341,7 +417,7 @@ class InductionQuenchSim:
         x[I] = spla.spsolve(Ac.tocsc(), bc)
         a_el = np.abs(x[self.mesh.t]) ** 2
         q_el = 0.5 * sig * w**2 * a_el.mean(axis=0)
-        P1 = np.sum(q_el * self._el_area_r() * 2 * np.pi)
+        P1 = np.sum(np.where(self.steel_el, q_el, 0.0) * self._el_area_r() * 2 * np.pi)   # 只算工件(辅助体不计入设定功率)
         I_coil = np.sqrt(self.P / P1)
         self._x_unit = x
         return x, I_coil, P1
@@ -659,7 +735,7 @@ class InductionQuenchSim:
             warn.append(f"最高 {res['T_max']:.0f}°C 过烧/晶粒粗大风险(>1100°C)")
         if res["T_zone_min"] < M.STEEL_45["Ac3_fast"]:
             warn.append(f"淬火区有部位只到 {res['T_zone_min']:.0f}°C，未完全奥氏体化")
-        if res["efficiency"] < 0.6:
+        if self.P > 0 and res["efficiency"] < 0.6:
             warn.append(f"电效率低 ({res['efficiency']*100:.0f}%)，频率与壁厚不匹配")
         if self.conc is not None and self.conc_loss_W > 0:
             vol = float(np.sum(self.conc_el * self._el_area_r() * 2 * np.pi))
@@ -668,6 +744,9 @@ class InductionQuenchSim:
             if res["conc_dTdt"] > 20:
                 warn.append(f"导磁体({self.conc.mat.name})自身发热 {self.conc_loss_W/1e3:.2f} kW，"
                             f"绝热升温约 {res['conc_dTdt']:.0f} K/s，必须水冷或会过热")
+        bad = [k for k, v in res.items() if isinstance(v, float) and np.isnan(v)]
+        if bad:
+            warn.append("结果含 NaN（" + ", ".join(bad) + "），计算无效，请检查输入参数")
         res["warnings"] = warn
         return res
 
