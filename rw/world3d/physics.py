@@ -367,6 +367,13 @@ def joint_check(res, j):
             if gp.get(gg, gg) not in side: continue
             for pos, f in pts:
                 F += sgn * f; M += np.cross(pos - center, sgn * f)
+    if j.get("weld"):
+        w = j["weld"]
+        fy = sc.get(j["part"]).material["fy"] / 1e6
+        r = _jnt.weld_check(F, M, j["normal"], w["legs"], w["hf"], fy, j.get("e1"))
+        r.update(base=j["base"], part=j["part"], side=side, weld=True,
+                 F=[float(x) for x in F], M=[float(x) for x in M])
+        return r
     r = _jnt.bolt_group_check(F, M, center, j["normal"], j["coords"], j["size"], j["grade"], j.get("e1"))
     r.update(base=j["base"], part=j["part"], side=side,
              F=[float(x) for x in F], M=[float(x) for x in M])

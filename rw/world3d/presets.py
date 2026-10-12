@@ -92,6 +92,16 @@ def wall_bracket():
     return s
 
 
+def weld_bracket():
+    """悬臂焊在墙板上：两道角焊缝（hf=6），臂端压钢块；焊缝群应力校核。"""
+    s = Scene("焊缝悬臂支架")
+    s.add("悬臂", "box", [300, 80, 20], "Q235", pos=[150, 0, 400], fixed=True, group="支架")
+    s.add("钢块", "box", [100, 100, 100], "Q235", pos=[250, 0, 460])
+    s.add_joint(base="墙板", part="悬臂", side=["悬臂"], weld=dict(hf=6, legs=[((-40, -10), (40, -10)), ((-40, 10), (40, 10))]),
+                center=[0, 0, 400], normal=[1, 0, 0], e1=[0, 1, 0])
+    return s
+
+
 def bearing_rotor(rpm=3000):
     """轴 + 偏心块，6206 轴承铰接，按转速旋转：测轴承反力、不平衡力、L10 寿命。"""
     s = Scene(f"轴承转子 {rpm:g} rpm")
@@ -126,4 +136,5 @@ PRESETS = {
     "壁挂支架 + 螺栓组": wall_bracket,
     "轴承转子 3000rpm": bearing_rotor,
     "玻璃板断裂演示": glass_drop,
+    "焊缝悬臂支架": weld_bracket,
 }

@@ -103,3 +103,48 @@ def hertz_line(F, L, R1, E1, nu1, E2, nu2):
     b_m = np.sqrt(4 * Fl * R_m / (np.pi * Es))
     p0 = np.sqrt(Fl * Es / (np.pi * R_m))
     return dict(b=b_m * 1000, p0=p0 / 1e6, R_eff=R1)
+
+
+# ----------------------------------------------------------------- 焊缝组
+def weld_check(F, M, normal, legs, hf, fy_MP, e1=None):
+    """角焊缝群（简化弹性法，典型系数，粗估）：
+    F: 接头力 N；M: 接头力矩 N·mm（对接头中心）；normal: 接合面外法向；
+    legs: [((u1,v1),(u2,v2)),...] 焊缝段（接合面内坐标 mm，u 沿 e1，v 沿 e2=n×e1）；hf: 焊脚 mm；
+    有效喉厚 a=0.7hf；剪应力 τ = F_shear/(a·ΣL) + 扭转 Mn·rmax/Jw；正应力 σ = N/(a·ΣL) + 面内弯矩×c/I；
+    合成: (σ+σ_b)²/fy² + (τ/0.6fy)² ≤ 1，fy 按母材（角焊缝强度系数含在 0.7 喉厚与 0.6 剪里，粗估）。"""
+    import numpy as np
+    n = np.array(normal, float); n /= np.linalg.norm(n)
+    if e1 is None:
+        a0 = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1.0, 0])
+        e1 = a0 - n * np.dot(a0, n)
+    e1 = np.array(e1, float); e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    a = 0.7 * hf
+    segs = []
+    for (u1, v1), (u2, v2) in legs:
+        d = np.hypot(u2 - u1, v2 - v1)
+        segs.append(dict(u1=u1, v1=v1, u2=u2, v2=v2, L=d, uc=(u1+u2)/2, vc=(v1+v2)/2))
+    Lt = sum(s["L"] for s in segs)
+    cu = sum(s["L"] * s["uc"] for s in segs) / Lt
+    cv = sum(s["L"] * s["vc"] for s in segs) / Lt
+    F = np.array(F, float)
+    N = float(np.dot(F, n))
+    Fs = float(np.linalg.norm(F - N * n))
+    M1 = float(np.dot(M, e1)); M2 = float(np.dot(M, e2)); Mn = float(np.dot(M, n))
+    Iu = 0.0; Iv = 0.0; J = 0.0; cmax_v = 0.0; cmax_u = 0.0; rmax = 0.0
+    for s in segs:
+        # 直线段解析线积分: ∫(v-cv)²ds = L[(vc-cv)² + (Δv)²/12]
+        du = s["u2"] - s["u1"]; dv = s["v2"] - s["v1"]; L = s["L"]
+        Iu += L * ((s["vc"] - cv) ** 2 + dv ** 2 / 12)
+        Iv += L * ((s["uc"] - cu) ** 2 + du ** 2 / 12)
+        J += L * ((s["vc"] - cv) ** 2 + (s["uc"] - cu) ** 2 + (du ** 2 + dv ** 2) / 12)
+        for uu, vv in ((s["u1"], s["v1"]), (s["u2"], s["v2"])):
+            cmax_v = max(cmax_v, abs(vv - cv)); cmax_u = max(cmax_u, abs(uu - cu))
+            rmax = max(rmax, float(np.hypot(uu - cu, vv - cv)))
+    sig = N / (a * Lt)
+    sig_b = (abs(M1) * cmax_v / Iu + abs(M2) * cmax_u / Iv) / a if Iu > 0 and Iv > 0 else 0.0
+    tau = Fs / (a * Lt) + (abs(Mn) * rmax / (a * J) if J > 0 else 0.0)
+    fy = fy_MP
+    util = (max(sig + sig_b, 0.0) / fy) ** 2 + (tau / (0.6 * fy)) ** 2
+    return dict(L=Lt, hf=hf, a=a, sig=sig, sig_b=sig_b, tau=tau, util=float(util), ok=bool(util <= 1.0),
+                cu=cu, cv=cv)

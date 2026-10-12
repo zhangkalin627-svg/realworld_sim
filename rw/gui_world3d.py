@@ -74,8 +74,9 @@ class World3DPage(QtWidgets.QWidget):
             b = QtWidgets.QPushButton(txt); b.clicked.connect(fn); hb.addWidget(b)
         left.addLayout(hb)
         self.btn = QtWidgets.QPushButton("▶ 放手，让重力起作用（物理仿真 + 体检）"); self.btn.clicked.connect(self.run)
+        self.bbreak = QtWidgets.QPushButton("💥 演示断裂后果（把断的梁分成两段再仿真）"); self.bbreak.clicked.connect(self.run_break); self.bbreak.setVisible(False)
         self.btn.setStyleSheet("font-weight:bold;padding:6px")
-        left.addWidget(self.btn)
+        left.addWidget(self.btn); left.addWidget(self.bbreak)
         lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setFixedWidth(600)
         lay.addWidget(lw)
         # ---- 右：视图 + 结果
@@ -178,6 +179,27 @@ class World3DPage(QtWidgets.QWidget):
             QtWidgets.QApplication.restoreOverrideCursor()
         n = len(self.res.frames)
         self.slider.setEnabled(True); self.slider.setMaximum(max(0, n - 1)); self.slider.setValue(n - 1)
+        self.bbreak.setVisible(bool(self.chk.get("broken")))
+        self.show_report()
+        self.bsel.clear()
+        for b in self.chk["beams"]: self.bsel.addItem(b["name"])
+        self.plot_beam()
+
+    def run_break(self):
+        """断裂后果：断口分裂 → 再仿真 → 再体检（v0.13）。"""
+        from .world3d.fracture import break_and_rerun
+        if not self.chk or not self.chk.get("broken"): return
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            out = break_and_rerun(self.res, self.chk, tmax=6.0)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        if out is None: return
+        self.scene, self.res, self.chk = out
+        self.view.set_scene(self.scene, keep_cam=True)
+        n = len(self.res.frames)
+        self.slider.setEnabled(True); self.slider.setMaximum(max(0, n - 1)); self.slider.setValue(n - 1)
+        self.bbreak.setVisible(False)
         self.show_report()
         self.bsel.clear()
         for b in self.chk["beams"]: self.bsel.addItem(b["name"])
@@ -248,6 +270,12 @@ class World3DPage(QtWidgets.QWidget):
             parts.append("</ul>")
         for j in c.get("bolts", []):
             col = "OK" if j["ok"] else "FAIL"
+            if j.get("weld"):
+                parts.append(f'<p><b>焊缝群（{_h.escape(j["part"])}，角焊缝 hf={j["hf"]} mm，ΣL={j["L"]:.0f} mm）：</b>'
+                             f'<span style="color:{COLOR[col]}">接头力 {np.linalg.norm(j["F"]):.0f} N、力矩 {np.linalg.norm(j["M"])/1e3:.2f} N·m；'
+                             f'σ={j["sig"]+j["sig_b"]:.1f} MPa，τ={j["tau"]:.1f} MPa，利用率 {j["util"]:.3f}</span>'
+                             f'（简化弹性法，喉厚 0.7hf；粗估，不含应力集中与焊根缺陷）</p>')
+                continue
             bt = max(j["bolts"], key=lambda x: -x["T"]); bv = max(j["bolts"], key=lambda x: -x["V"])
             parts.append(f'<p><b>螺栓组（{_h.escape(j["part"])}，{len(j["bolts"])}×M{j["size"]} {j["grade"]}）：</b>'
                          f'<span style="color:{COLOR[col]}">接头力 {np.linalg.norm(j["F"]):.0f} N、力矩 {np.linalg.norm(j["M"])/1e3:.2f} N·m；'
