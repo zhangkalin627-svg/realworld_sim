@@ -4,6 +4,7 @@
 运行函数签名: run(params: dict, progress: callable(fraction)) -> {"lines": [str], "warnings": [str], "plots": [{"title", "svg"}], "raw": dict}
 图用服务器端 matplotlib 渲染成 SVG 字符串，前端内联显示，不需要 JS 图表库。"""
 import io
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")                    # 服务器无显示环境
 import matplotlib.pyplot as plt
@@ -298,7 +299,7 @@ def run_circuit(params, progress):
     for ch in chans:
         try:
             y = np.asarray(w[ch], float)
-        except Exception:
+        except KeyError:
             continue
         m = sc.measure(w.time, y)
         raw_meas[ch] = dict(m)
@@ -317,7 +318,7 @@ def run_circuit(params, progress):
     for ch in chans:
         try:
             ax.plot(w.time, w[ch], lw=1.2, label=ch)
-        except Exception:
+        except KeyError:
             pass
     ax.set_xlabel("t (s)"); ax.set_ylabel("V")
     ax.legend(fontsize=9); ax.set_title(f"{name} · 瞬态波形")
@@ -329,10 +330,10 @@ def run_circuit(params, progress):
             ax.semilogx(f[1:], db[1:], lw=1)
             ax.set_xlabel("f (Hz)"); ax.set_ylabel("dBV"); ax.set_title(f"{chans[0]} 频谱")
             plots.append({"title": "频谱", "svg": _svg(fig)})
-        except Exception:
-            pass
+        except Exception as e:
+            warns.append(f"频谱计算失败：{e}")
     if wa is not None:
-        node = chans[-1]
+        node = chans[-1] if chans and chans[-1] in wa else (wa.nets() or [None])[-1]
         v = np.asarray(wa[node])
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(7, 4.6), sharex=True)
         a1.semilogx(wa.freq, 20 * np.log10(np.maximum(np.abs(v), 1e-15)), lw=1.2); a1.set_ylabel("dB"); a1.grid(True, alpha=.3)
