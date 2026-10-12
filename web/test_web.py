@@ -30,6 +30,15 @@ def run_wait(key, params, timeout=240):
         time.sleep(1.0)
     raise TimeoutError(key)
 
+def run_wait_id(jid, timeout=240):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        j = c.get(f"/api/job/{jid}").json()
+        if j["status"] != "running":
+            return j
+        time.sleep(1.0)
+    raise TimeoutError(jid)
+
 j = run_wait("materials", {})
 assert j["status"] == "done" and any("45钢" in l for l in j["result"]["lines"]), str(j)[:300]
 print("[web-c] 材料库即查 OK")
@@ -157,5 +166,30 @@ if _sp.find_ngspice():
 else:
     assert j["status"] == "error" and "ngspice" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
     print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 无 ngspice → 友好报错（完整算例需有 ngspice 的服务器验证）")
+
+
+# [web-l] 断点续算：跑完的任务带检查点 → 模拟中断 → 续算终态与连续运行一致
+t1 = time.time()
+j = run_wait("induction", {"mode": "power", "power_kw": 6, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5}, timeout=120)
+assert j["status"] == "done", j.get("error", "?")[:150]
+full = j["result"]["raw"]
+ja = c.get(f"/api/job/{j['id']}").json()
+assert ja.get("has_checkpoint"), "感应淬火任务应周期落检查点"
+# 模拟服务器重启中断（直接改库状态），再续算
+import sqlite3 as _sq, os as _os
+_db = _os.environ.get("RW_JOBS_DB", "realworld_jobs.db")
+_sq.connect(_db).execute("UPDATE jobs SET status='interrupted' WHERE id=?", (j["id"],)).connection.commit()
+r2 = c.post("/api/sim/induction", json={"params": {"mode": "power", "power_kw": 6, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5, "resume_from": j["id"]}})
+assert r2.status_code == 200, r2.text[:200]
+j2 = run_wait_id(r2.json()["job"], timeout=120)
+assert j2["status"] == "done", j2.get("error", "?")[:150]
+res2 = j2["result"]["raw"]
+assert abs(res2["case_depth_mm"] - full["case_depth_mm"]) < 0.02, (res2["case_depth_mm"], full["case_depth_mm"])
+assert abs(res2["HRC_surface"] - full["HRC_surface"]) < 0.2
+# 参数变了（功率不同）指纹不符 → 忽略旧检查点从头跑，也必须正常完成
+r3 = c.post("/api/sim/induction", json={"params": {"mode": "power", "power_kw": 12, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5, "resume_from": j["id"]}})
+j3 = run_wait_id(r3.json()["job"], timeout=120)
+assert j3["status"] == "done", j3.get("error", "?")[:150]
+print(f"[web-l] 断点续算 OK ({time.time()-t1:.0f}s): 检查点落盘/中断后续算终态一致(硬化层差<0.02mm)/参数变更加头重跑")
 
 print("web 冒烟测试全部通过")

@@ -64,7 +64,16 @@ def start_sim(key: str, req: RunReq):
     mod = next((m for m in MODULES if m["key"] == key), None)
     if mod is None:
         raise HTTPException(404, "未知模块")
-    params = _validate_params(mod, req.params)
+    params = dict(req.params)
+    resume_from = params.pop("resume_from", None)      # v0.25 断点续算：从某个中断任务的检查点接着算
+    resume_state = None
+    if resume_from and mod.get("ckpt"):
+        old_job = STORE.get(str(resume_from))
+        ck = STORE.get_checkpoint(str(resume_from))
+        if old_job and ck and old_job["module"] == key and old_job["status"] in ("interrupted", "error"):
+            import json as _json
+            resume_state = _json.loads(ck)
+    params = _validate_params(mod, params)
     jid = uuid.uuid4().hex[:12]
     STORE.create(jid, key, params)
     last = [0.0, -1.0]                                # (上次写入的进度, 上次写入时间)：进度落盘节流
@@ -76,7 +85,12 @@ def start_sim(key: str, req: RunReq):
 
     def job():
         try:
-            res = mod["run"](params, on_progress)
+            if mod.get("ckpt"):
+                import json as _json
+                ck_cb = lambda st: STORE.set_checkpoint(jid, _json.dumps(st))
+                res = mod["run"](params, on_progress, checkpoint=ck_cb, resume=resume_state)
+            else:
+                res = mod["run"](params, on_progress)
             STORE.set_done(jid, res)
         except Exception as e:
             traceback.print_exc()                       # 完整堆栈只留在服务器日志，不回给客户端

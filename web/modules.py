@@ -54,8 +54,8 @@ def _plot(sim, kind, title):
     return {"title": title, "svg": _svg(fig)}
 
 
-def run_induction(params, progress):
-    """感应淬火：参数对齐桌面版①页。慢任务（非线性约 ×3），由任务线程跑。"""
+def run_induction(params, progress, checkpoint=None, resume=None):
+    """感应淬火：参数对齐桌面版①页。慢任务（非线性约 ×3），由任务线程跑。支持断点续算 (v0.25)。"""
     from rw.induction import InductionQuenchSim, BottleNeckGeometry, find_power
     f = lambda k, d: float(params.get(k, d))
     g = BottleNeckGeometry(neck_od=f("neck_od", 22), wall=f("wall", 3), neck_len=f("neck_len", 50),
@@ -75,7 +75,13 @@ def run_induction(params, progress):
     else:
         kw["power_kw"] = f("power_kw", 6.0)
     sim = InductionQuenchSim(**kw)
-    r = _clean(sim.run(progress=lambda f: progress(0.05 + 0.95 * f)))
+    if resume and resume.get("params_fingerprint") == _ind_fingerprint(params):
+        pass  # 指纹一致才续算（双保险，服务器侧已按模块+状态过滤）
+    elif resume:
+        resume = None  # 指纹不符：从头跑，不用旧状态
+    r = _clean(sim.run(progress=lambda f: progress(0.05 + 0.95 * f),
+                       checkpoint=checkpoint and (lambda st: checkpoint({**st, "params_fingerprint": _ind_fingerprint(params)})),
+                       resume=resume))
     lines = [
         f"频率 {_num(r['freq_kHz'])} kHz，工件吸收 {_num(r['power_kW'], 2)} kW",
         f"透入深度：冷态 {_num(r['skin_cold_mm'], 2)} mm，热态(>居里点) {_num(r['skin_hot_mm'], 2)} mm",
@@ -90,6 +96,13 @@ def run_induction(params, progress):
     plots = [_plot(sim, "temp", "加热结束温度场"), _plot(sim, "hrc", "淬火后硬度（估算）"),
              _plot(sim, "curve", "监测点温度 / 线圈电流"), _plot(sim, "line", "淬火区中部：硬度随深度")]
     return {"lines": lines, "warnings": r["warnings"], "plots": plots, "raw": r}
+
+
+def _ind_fingerprint(params):
+    """断点续算参数指纹：几何/频率/功率/时间/介质任一变化都不能沿用旧检查点。"""
+    keys = ("neck_od", "wall", "neck_len", "zone", "coil_id", "coil_h", "freq", "mode", "target",
+            "power_kw", "t_heat", "t_quench", "medium", "mur_cold", "nonlinear")
+    return "|".join(str(params.get(k)) for k in keys)
 
 
 def run_materials(params, progress):
@@ -177,7 +190,7 @@ MODULES = [
           "options": [{"v": "water_spray", "t": "清水喷淋"}, {"v": "polymer_spray", "t": "聚合物喷淋"}, {"v": "water_dip", "t": "清水浸入"}, {"v": "oil_dip", "t": "油浸"}, {"v": "air", "t": "空冷"}]},
          {"name": "t_quench", "label": "淬火时间 s", "type": "number", "default": 3, "min": 0.1, "max": 60, "step": 0.1},
      ],
-     "run": run_induction},
+     "run": run_induction, "ckpt": True},
     {"key": "materials", "name": "材料库", "desc": "45 钢关键相变点 + 淬火介质换热参数（只读查询）",
      "fields": [], "run": run_materials},
     {"key": "world3d", "name": "三维装配世界", "desc": "零件摆放 → 刚体物理仿真 → 受力体检（稳定性/梁应力/螺栓/轴承/赫兹），浏览器 3D 动画回放",

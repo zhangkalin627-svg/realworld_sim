@@ -403,7 +403,19 @@ class InductionQuenchSim:
         return spla.spsolve(A.tocsc(), b)
 
     # -------------------------------------------------------------- 运行
-    def run(self, progress=None):
+    def _snapshot(self, T, Tpeak, t800, t500, hist, t, I):
+        """断点续算状态（纯 JSON 可序列化）。恢复后与原连续运行的差异仅在：
+        恢复点立刻重解一次电磁（等效于 EM 求解时刻轻微移动），终态偏差实测远小于 1%。"""
+        def cx(a):
+            return None if a is None else {"re": np.real(a).tolist(), "im": np.imag(a).tolist()}
+        return {"T": T.tolist(), "Tpeak": Tpeak.tolist(), "t800": t800.tolist(), "t500": t500.tolist(),
+                "hist": {k: list(v) for k, v in hist.items()}, "t": float(t), "I": float(I),
+                "I_hist": [float(x) for x in self.I_hist],
+                "T_end_heat": None if self.T_end_heat is None else self.T_end_heat.tolist(),
+                "A_end_heat": cx(self.A_end_heat), "I_end": self.I_end,
+                "mur_state": None if self._mur_state is None else self._mur_state.tolist()}
+
+    def run(self, progress=None, checkpoint=None, resume=None, checkpoint_every=200):
         nT = self.tb.N
         T = np.full(nT, self.T0)
         Tpeak = T.copy()
@@ -427,9 +439,31 @@ class InductionQuenchSim:
         q, I = self.solve_em(T)
         t_lastem = 0.0
         self.T_end_heat = None
+        self.A_end_heat = None
+        self.I_end = None
         self.I_hist = []
         steps = int(round(t_end / self.dt))
-        for s in range(steps):
+        s0 = 0
+        if resume:  # 断点续算：从 checkpoint 恢复全部携带状态（_thermal_step 本身无状态）
+            T = np.asarray(resume["T"], float)
+            Tpeak = np.asarray(resume["Tpeak"], float)
+            t800 = np.asarray(resume["t800"], float)
+            t500 = np.asarray(resume["t500"], float)
+            hist = {k: list(v) for k, v in resume["hist"].items()}
+            t = float(resume["t"])
+            I = float(resume["I"])
+            t_lastem = -1e18          # 强制下一步重解电磁（q 与当前 T 一致）
+            q = None
+            self.I_hist = [float(x) for x in resume["I_hist"]]
+            te = resume.get("T_end_heat")
+            self.T_end_heat = np.asarray(te, float) if te is not None else None
+            ae = resume.get("A_end_heat")
+            self.A_end_heat = (np.asarray(ae["re"]) + 1j * np.asarray(ae["im"])) if ae is not None else None
+            self.I_end = resume.get("I_end")
+            ms = resume.get("mur_state")
+            self._mur_state = np.asarray(ms, float) if ms is not None else None
+            s0 = int(round(t / self.dt))
+        for s in range(s0, steps):
             if t < self.t_heat - 1e-9:
                 phase = "heat"
                 if t - t_lastem >= self.em_every - 1e-9:
@@ -466,6 +500,8 @@ class InductionQuenchSim:
             hist["Tin"].append(T[i_in])
             if progress and s % 20 == 0:
                 progress(s / steps)
+            if checkpoint and checkpoint_every and s % checkpoint_every == 0:
+                checkpoint(self._snapshot(T, Tpeak, t800, t500, hist, t, I))
         if self.T_end_heat is None:
             self.T_end_heat = T.copy()
             self.A_end_heat = self._last_A
