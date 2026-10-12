@@ -86,7 +86,11 @@ class Scope:
         c = self.ch[ch - 1] if isinstance(ch, int) else ch
         if not c.source:
             return None
-        y = np.real(np.asarray(self.wave[c.source], float))
+        try:
+            y = np.real(np.asarray(self.wave[c.source], float))
+        except KeyError:
+            self.warn = "没有网络 %s，该通道显示为空" % c.source
+            return None
         if c.coupling == "AC":
             y = y - _tavg(self.t, y)
         return y
@@ -163,6 +167,8 @@ class Scope:
         """取一帧。返回 dict：t0（屏幕左边对应的绝对时间）、tt（触发时刻或 None）、traces、状态文字。"""
         if self.t is None:
             return None
+        if not (self.tdiv > 0):  # tdiv≤0 无意义，钳到最小 1 ns
+            self.tdiv = 1e-9
         if self.trig.mode == "Single" and self.single_done and self.last is not None:
             return dict(self.last, status="Stop（Single 已触发，按“单次”重新等待）")
         tt = self.trigger_times()
@@ -191,7 +197,7 @@ class Scope:
         fr = dict(t0=t0, tt=ttrig, traces={}, status=status, center=center,
                   trig_no=fr_k if ttrig is not None else None)
         for c in self.ch:
-            if c.on and c.source:
+            if c.on and c.source and self.raw(c.n) is not None:
                 x, y = self.window(c.n, t0, t0 + HDIV * self.tdiv)
                 fr["traces"][c.n] = (x, y)
         self.last = fr
