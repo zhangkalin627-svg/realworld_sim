@@ -31,6 +31,13 @@ function select(i) {
     if (fd.type === 'check') {
       lab.className = 'ck';
       lab.innerHTML = `<input type="checkbox" name="${fd.name}" ${fd.default ? 'checked' : ''}> <span>${fd.label}</span>`;
+    } else if (fd.type === 'textarea') {
+      lab.className = 'ta';
+      const ta = document.createElement('textarea');
+      ta.name = fd.name; ta.rows = 16; ta.spellcheck = false;
+      ta.value = fd.default || '';
+      lab.innerHTML = `<span>${fd.label}</span>`;
+      lab.appendChild(ta);
     } else if (fd.type === 'select') {
       const opts = fd.options.map(o => {
         const v = typeof o === 'object' ? o.v : o, t = typeof o === 'object' ? o.t : o;

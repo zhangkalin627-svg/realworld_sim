@@ -104,6 +104,16 @@ def _w3d(params, progress):
     return run_world3d(params, progress)
 
 
+def _plc(params, progress):
+    from .plcsim import run_plc
+    return run_plc(params, progress)
+
+
+def _plc_default_program():
+    from rw.plc.demo import DEMO_IL
+    return DEMO_IL
+
+
 MODULES = [
     {"key": "induction", "name": "感应加热淬火", "desc": "瓶坯感应加热 + 喷淋淬火全过程：温度场、硬度、硬化层深度",
      "fields": [
@@ -139,4 +149,14 @@ MODULES = [
          {"name": "tmax", "label": "仿真时长上限 s", "type": "number", "default": 8, "min": 1, "max": 15, "step": 1},
      ],
      "run": _w3d},
+    {"key": "plc", "name": "PLC 虚拟调试", "desc": "三菱 FX 指令表（含 STL 步进）+ 单工位感应淬火设备模型：整段运行 → 逻辑分析仪时序图 + 节拍/不合格统计",
+     "fields": [
+         {"name": "program", "label": "FX 指令表程序（可直接改，; 后为注释）", "type": "textarea", "default": _plc_default_program()},
+         {"name": "p_air", "label": "气源气压 MPa", "type": "number", "default": 0.5, "min": 0.1, "max": 0.8, "step": 0.05},
+         {"name": "scenario", "label": "演示剧本", "type": "select", "default": "normal",
+          "options": [{"v": "normal", "t": "正常循环（0.3 s 按启动）"}, {"v": "estop", "t": "急停演示（中途急停 2 s 后复位重启）"}]},
+         {"name": "estop_at", "label": "急停时刻 s（仅急停剧本）", "type": "number", "default": 8, "min": 1, "max": 170, "step": 1},
+         {"name": "t_sim", "label": "运行时长 s", "type": "number", "default": 60, "min": 5, "max": 180, "step": 5},
+     ],
+     "run": _plc},
 ]
