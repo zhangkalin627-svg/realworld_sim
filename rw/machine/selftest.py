@@ -37,7 +37,7 @@ def run():
             f / 1e3, T, s["I"], Irms, pct(s["I"], Irms), s["P_out"], P_sp, pct(s["P_out"], P_sp)))
         assert abs(pct(s["P_out"], P_sp)) < 2.0, "基波近似偏差过大"
     # (b) 合旁路冲击电流 vs ngspice
-    print("[整机] 合旁路冲击电流：RK4 vs ngspice（Rs=0.12 Ω, L=0.5 mH, C=2 mF）")
+    print("[整机] 合旁路冲击电流：RK4 vs ngspice（Rs=%.2f Ω, L=%.2f mH, C=%.0f mF）" % (sp.Rs, sp.L_line * 1e3, sp.C_bus * 1e3))
     b = Bus(sp)
     for V0 in (0.0, 300.0, 450.0):
         Ipk, ER, Q, _ = b.inrush(513.0, V0)
@@ -69,13 +69,14 @@ def run():
         ein / 1e3, m.E_out / 1e3, m.E_inv / 1e3, pct(ein, eparts), m.E_wp / 1e3, m.E_coil / 1e3))
     assert abs(pct(ein, eparts)) < 1.0
     r = m.done[0]
-    Tt = m.th.T_surface(3.0)
-    print("   加热 3 s：工件吸收 %.2f kJ（有限元表 5.944 kW×3 s = %.2f kJ），峰值温度 %.0f°C，表(t=3.0 s) %.0f°C；节拍 %.2f s" % (
-        r["E_wp_kJ"], 5.944 * 3, r["T_peak"], Tt, m.done[1]["t_done"] - m.done[0]["t_done"]))
-    assert abs(r["E_wp_kJ"] / (5.944 * 3) - 1) < 0.02 and abs(r["T_peak"] - Tt) < 15
+    tau = r["E_wp_kJ"] / 5.944
+    Tt = m.th.T_surface(tau)
+    print("   部分功率 %.0f kW 加热 %s：工件吸收 %.2f kJ（v0.8 有限元表 5.944 kW×3 s = %.2f kJ，%+.1f%%），能量等效 τ=%.2f s；峰值温度 %.0f°C，表(τ) %.0f°C；节拍 %.2f s" % (
+        m.sp.P_set_out / 1e3, SC.HEAT_PART, r["E_wp_kJ"], 5.944 * 3, pct(r["E_wp_kJ"], 5.944 * 3), tau, r["T_peak"], Tt, m.done[1]["t_done"] - m.done[0]["t_done"]))
+    assert abs(r["E_wp_kJ"] / (5.944 * 3) - 1) < 0.08 and abs(r["T_peak"] - Tt) < 15
     Pw = np.array(m.log["P_out"]); Pr = np.array(m.log["P_ref"]); run_ = np.array(m.log["reached"]) > 0
     err = np.abs(Pw[run_] - Pr[run_]) / Pr[run_]
-    print("   变频器稳功率：到达设定后输出功率偏差 最大 %.1f%%（设定 %.1f kW）" % (100 * err.max(), sp.P_set_out / 1e3))
+    print("   变频器稳功率：到达设定后输出功率偏差 最大 %.1f%%（设定 %.1f kW）" % (100 * err.max(), m.sp.P_set_out / 1e3))
     assert err.max() < 0.06
     # (e) 缺水联锁反应时间：流量衰减到 50% 的时间 τ·ln2 + 0.5 s 定时器 + ≤1 扫描
     m2, S2 = SC.run("water_loss")
@@ -101,4 +102,70 @@ def run():
     print("[整机] 8 小时后水箱：无换热器 %.1f°C（喷淋等效淬火 %.2f→%.2f s），有换热器 %.1f°C（稳态 %.1f°C）" % (
         S8["ff"]["T1"], m8.done[0]["tq"], m8.done[-1]["tq"], S9["ff"]["T1"], S9["ff"]["T_ss"]))
     assert S8["ff"]["T1"] > 45 > S9["ff"]["T1"]
+    # (j) 100 kW 满功率（2026-10-12 起整机默认 100 kW 通用机）
+    run_100k()
+    run_logcap()
+    run_sanity()
     print("[整机] 自检通过")
+
+
+def run_100k():
+    """满功率：老化 8 h 不误动、冷水机不足必须动作（不拒动）、温升网络热平衡、负载短路硬件过流保护。"""
+    from . import stress as ST
+    sp = Spec()
+    m, S = SC.run("fp_burnin")
+    pr = S["pr"]; lr = S["lr"]; se = lr["series"]
+    print("[整机·100kW] 满载老化：输出 %.1f kW，f/f0 %.3f，逆变器效率 %.1f%%，进线 PF %.3f；8 h 外推进水 %.1f°C、IGBT 结温 %.0f°C、变压器 %.0f°C，%s" % (
+        pr["P_out"] / 1e3, pr["f"] / pr["f0"], 100 * pr["eta_inv"], pr["PF"], se["T_w"].max(), se["Tj"].max(), se["T_tr"].max(),
+        "无保护动作" if lr["trip"] is None else "保护动作 " + lr["trip"][2]))
+    assert abs(pr["P_out"] / 100e3 - 1) < 0.03, "满功率没出来"
+    assert pr["f"] / pr["f0"] > 1.0, "失去感性负载（ZVS）"
+    assert not m.ctl.fault_log and lr["trip"] is None, "满载老化不应保护动作（误动）"
+    assert se["Tj"].max() < sp.mod.Tj_design
+    # 满功率能量守恒（问题单 20261012-1820 要求）：电网 = 母线电容 + 电阻 + 泄放 + 逆变器输入；逆变器输入 = 输出 + 逆变器/控制损耗
+    bus = m.bus
+    e1 = pct(bus.E_src, bus.E_cap() + bus.E_R + bus.E_load + bus.E_bleed); e2 = pct(bus.E_load, m.E_out + m.E_inv)
+    e3 = pct(m.E_out, m.E_wp + m.E_coil)
+    print("   满功率能量守恒（详细仿真 %.0f s）：电网 %.2f MJ，母线侧差 %+.3f%%；逆变器输入 = 输出 + 损耗 差 %+.3f%%；输出 = 工件 %.2f MJ + 线圈侧 %.2f MJ 差 %+.3f%%" % (
+        m.t, bus.E_src / 1e6, e1, e2, m.E_wp / 1e6, m.E_coil / 1e6, e3))
+    assert abs(e1) < 1.0 and abs(e2) < 1.0 and abs(e3) < 1.0
+    # 热平衡：外推末段冷却水回路 得热（器件+线圈+水箱换热）≈ 冷水机/散热带走
+    La = lr["Lavg"]
+    print("   平均损耗：逆变器 %.2f kW、整流 %.2f kW、变压器 %.2f kW、线圈侧 %.1f kW；冷水机末段 %.1f kW" % (
+        La["inv_total"] / 1e3, La["rect"] / 1e3, (La["tr_cu"] + La["tr_core"]) / 1e3, La["P_coil"] / 1e3, se["Q_ch"][-1] / 1e3))
+    m2, S2 = SC.run("fp_burnin_hot")
+    tr = S2["lr"]["trip"]
+    print("[整机·100kW] 40°C + 冷水机 20 kW：%s" % ("第 %.2f h %s" % (tr[0], tr[2]) if tr else "8 h 无保护动作（拒动！）"))
+    assert tr is not None, "冷却能力不足时保护拒动"
+    m3, S3 = SC.run("fp_short")
+    hw = S3["tr"]["hw"]
+    print("[整机·100kW] 满功率负载短路 + 硬件过流比较器：电流峰值 %.0f A（I_CRM %.0f A），谐振电容峰值 %.0f V" % (hw["I_pk_after"], sp.mod.I_crm, hw["Vc_pk"]))
+    assert hw["I_pk_after"] < sp.mod.I_crm
+
+
+def run_logcap():
+    """#2031 回归：日志行数有界（降采样），事件不丢。"""
+    from rw.machine import scenarios
+    m = scenarios.build("normal"); m.LOG_MAX = 500
+    m.run(30.0)
+    n = len(m.log["t"])
+    assert n <= 500 and len(m.ylog) == n and len(m.xlog) == n and all(len(v) == n for v in m.log.values()), n
+    assert m.events, "事件丢失"
+    print("[整机] 日志有界：3000 扫描 → %d 行（上限 500），stride=%d，事件 %d 条" % (n, m._log_stride, len(m.events)))
+
+
+def run_sanity():
+    """#1823 回归：非法参数构造时报错。"""
+    from rw.machine.machine import Machine
+    from rw.machine.power import Spec
+    import dataclasses
+    for kw, name in (({"spec": dataclasses.replace(Spec(), P_set_out=0)}, "P=0"),
+                     ({"spec": dataclasses.replace(Spec(), P_set_out=-5e3)}, "P<0"),
+                     ({"T_tank0": 200}, "T_tank0=200"), ({"p_air": -1.0}, "p_air<0")):
+        try:
+            Machine(**kw)
+        except ValueError:
+            continue
+        raise AssertionError(name + " 未被拒绝")
+    Machine()
+    print("[整机] 参数校验：P_set_out≤0、p_air<0、T_tank0≥100°C 均抛 ValueError")

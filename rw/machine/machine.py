@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """整机：PLC(10 ms 扫描) + 变频器固件(1 kHz) + 主回路 + 气缸 + 冷却水 + 喷淋 + 工件加热 + 水箱/线圈温度。
 链条：上电 → PLC 顺序 → 预充电/旁路 → 变频器就绪 → 下降线圈 → 高频使能 → 谐振功率 → 工件升温(红外测温) → 喷淋淬火 → 提升 → 下一件。
+100 kW 版（2026-10-12）：默认电源 100 kW（power.Spec），加冷却水回路/冷水机 + 器件温升网络（stress.ThermalNet）、
+过温保护（IGBT 基板 NTC、进水温度）、满载老化负载（load="burnin"：工件温度恒定的假负载）、长时间温升外推 longrun_thermal()。
 工件加热：用 v0.1 有限元算出的“加热时间→温度/硬度”表(models/demo/thermal_table.json，恒定吸收功率 5.94 kW)，
 按“能量等效时间” τ = ∫P_wp dt / 5.94 kW 查表。这是近似：功率变化时的温度场分布(表面/心部)不同于恒功率，已在汇报里标明。
 """
@@ -13,12 +15,15 @@ from ..plc.thermal_table import ThermalTable
 from ..world.pipes import example_spray
 from ..world.longrun import pag_severity
 from .power import Spec, Bus, Stage, Controller
+from .stress import ThermalNet, component_losses, rectifier_pf
 from .plc_prog import MACHINE_IL
 
 CP_PAG = 4000.0 * 1.02   # J/(L·K)·1000 → 4.08 kJ/(L·K)
 
 
 class Part:
+    fixed = False
+
     def __init__(self, pid, t_in):
         self.id = pid; self.t_in = t_in
         self.tau = 0.0; self.tq = 0.0; self.E_wp = 0.0; self.E_to_tank = 0.0
@@ -32,8 +37,23 @@ class Machine:
     SCAN = 0.010
 
     def __init__(self, il=MACHINE_IL, spec=None, p_air=0.55, T_tank0=25.0, V_tank_L=300.0, UA_hex=500.0,
-                 T_cw=20.0, T_amb=30.0, sag=1.0, Q_cw=8.0, load_time=1.5, thermal=None):
+                 T_cw=None, T_amb=30.0, sag=1.0, Q_cw=None, load_time=1.5, thermal=None, load="part", T_load=850.0):
         self.sp = spec or Spec()
+        sp0 = self.sp
+        if not (sp0.P_set_out > 0):
+            raise ValueError("P_set_out 必须 > 0 W（得到 %r）" % (sp0.P_set_out,))
+        if not (p_air >= 0):
+            raise ValueError("p_air 必须 ≥ 0 MPa（得到 %r）" % (p_air,))
+        if not (0.0 <= T_tank0 < 100.0):
+            raise ValueError("T_tank0 必须在 0~100 °C 液态范围内（常压水/PAG 沸点≈100 °C，得到 %r）" % (T_tank0,))
+        if T_cw is None:
+            T_cw = sp0.cool.T_set if sp0.use_thermal_net else 20.0
+        if Q_cw is None:
+            Q_cw = sp0.Q_cw_Lmin
+        self.load = load; self.T_load = T_load
+        self.net = ThermalNet(sp0.cool, sp0.mod, T0=T_cw, T_amb=T_amb) if sp0.use_thermal_net else None
+        self._acc = None; self._acc_hist = []
+        self._k_rip = None
         self.il = il
         self.plc = FX3U(il.splitlines(), scan_ms=int(self.SCAN * 1000))
         self.bus = Bus(self.sp); self.stage = Stage(self.sp); self.ctl = Controller(self.sp)
@@ -57,6 +77,12 @@ class Machine:
         self.E_tank_total = 0.0
         # 工件
         self.part = None; self.n_part = 0; self.t_empty = 0.5 - load_time; self.load_time = load_time
+        if load in ("burnin", "heavy"):
+            self.part = Part(1, 0.0); self.part.fixed = True; self.n_part = 1
+            self.part.T = T_load if load == "burnin" else 25.0; self.part.T_peak = self.part.T
+        self.m_heavy = 2.0; self.c_heavy = 650.0      # 大工件：2 kg 钢，等效比热含相变潜热（估算）
+        self.Q_cw_supply_frac = 1.0
+        self._s_last = dict(I=0.0, I_pk=0.0, P_out=0.0, P_wp=0.0, P_coil=0.0, P_inv=0.0, P_in=0.0)
         self.done = []; self.scrapped = 0
         # 操作 / 故障
         self.sched = []                  # (t, fn)
@@ -65,8 +91,11 @@ class Machine:
         self.events = []
         # 日志
         self.log = {k: [] for k in ("t", "Vbus", "I_src", "f", "P_out", "P_wp", "P_in", "I_pk", "T_wp", "T_coil", "T_tank",
-                                    "cw", "spray", "pos", "step", "ready", "fault", "run", "reached", "P_ref")}
+                                    "cw", "spray", "pos", "step", "ready", "fault", "run", "reached", "P_ref",
+                                    "Tj", "T_plate", "T_w", "T_cap", "T_tr", "T_cab", "P_invloss", "Vc", "phi", "I_off")}
         self.ylog = []; self.xlog = []
+        self.LOG_MAX = 200000            # 日志行数上限；超出后整体 2 倍降采样（内存有界，8 h 长跑 < 约 200 MB）
+        self._log_stride = 1; self._log_n = 0
         self.step_names = {}
         # 能量账
         self.E_wp = 0.0; self.E_coil = 0.0; self.E_inv = 0.0; self.E_out = 0.0
@@ -196,7 +225,7 @@ class Machine:
         elif self.tr < 1e6:
             self.pos = max(0.0, self.pos - dt / self.tr)
         # 冷却水 / 喷淋
-        tgt = self.Q_cw if (self.cw_on and self.cw_supply_ok) else 0.0
+        tgt = self.Q_cw * self.Q_cw_supply_frac if (self.cw_on and self.cw_supply_ok) else 0.0
         self.cw_flow += (tgt - self.cw_flow) * min(1.0, dt / 0.3)
         tgt = self.spray_Q() if self.sp_on else 0.0
         self.sp_flow += (tgt - self.sp_flow) * min(1.0, dt / 0.4)
@@ -219,6 +248,7 @@ class Machine:
                 pass
         self.bus.step(dt, Vsrc, P_in)
         self.i_peak_max = max(self.i_peak_max, s["I_pk"])
+        self._s_last = s
         # 能量账
         self.E_wp += s["P_wp"] * dt; self.E_coil += s["P_coil"] * dt; self.E_inv += s["P_inv"] * dt; self.E_out += s["P_out"] * dt
         # 线圈温度：铜损 + 工件辐射 − 冷却水(+空气)
@@ -227,7 +257,8 @@ class Machine:
             P_rad = 0.5 * 5.67e-8 * 0.0017 * ((p.T + 273.15) ** 4 - (self.T_coil + 273.15) ** 4) * 1.0
         Gw = sp.G_water * min(self.cw_flow / self.Q_cw, 1.3) ** 0.8 if self.Q_cw > 0 else 0.0
         P_air = 2.0 * (self.T_coil - self.T_amb)
-        self.T_coil += dt * (s["P_coil"] + P_rad - Gw * (self.T_coil - self.T_cw) - P_air) / sp.C_coil
+        P_c2w = Gw * (self.T_coil - self.T_cw)
+        self.T_coil += dt * (s["P_coil"] + P_rad - P_c2w - P_air) / sp.C_coil
         if s["P_coil"] > 0:
             self._hf_seen = True
         if getattr(self, "_hf_seen", False):
@@ -236,7 +267,14 @@ class Machine:
             self.coil_damage_t = self.t
             self.ev(f"线圈温度 {self.T_coil:.0f}°C 超过 {sp.coil_fail:.0f}°C：焊点/绝缘失效，视为损坏")
         # 工件
-        if p is not None:
+        if p is not None and p.fixed:
+            if s["P_wp"] > 0:
+                p.E_wp += s["P_wp"] * dt; p.touched = True
+            if self.load == "heavy":
+                q_loss = 0.8 * 5.67e-8 * 0.03 * ((p.T + 273.15) ** 4 - (self.T_amb + 273.15) ** 4)
+                p.T += dt * (s["P_wp"] - q_loss) / (self.m_heavy * self.c_heavy)
+                p.T_peak = max(p.T_peak, p.T)
+        elif p is not None:
             if s["P_wp"] > 0 and self.pos >= 0.55:
                 if p.t_heat0 is None:
                     p.t_heat0 = self.t
@@ -258,19 +296,72 @@ class Machine:
                 Tafter = 204.0
                 p.T = max(p.T - (p.T_peak - Tafter) * dq / 3.0, 25.0) if p.T > 25 else p.T
         # 水箱（每步都算：换热器 + 环境）
-        self._tank_step(dt)
+        q_hex = self._tank_step(dt)
+        # 器件损耗 + 冷却水回路温升网络
+        if self.net is not None:
+            run = s.get("I", 0.0) > 0
+            Lz = component_losses(sp, s, Vb, s.get("f", self.ctl.f_q), s["P_in"], self.k_rip() * s["P_in"] / max(Vb, 1.0)) if run else \
+                dict(pos_T=0.0, pos_D=0.0, rect=0.0, tr_cu=0.0, tr_core=0.0, cap=0.0, bus_can=0.0, Vc=0.0, phi_deg=0.0, I_off=0.0, inv_total=0.0)
+            Lz["P_c2w"] = P_c2w; Lz["q_hex"] = q_hex; Lz["P_coil"] = s["P_coil"]; Lz["P_wp"] = s["P_wp"]; Lz["P_in"] = s["P_in"]
+            Lz["P_grid"] = self.bus.I_src * Vsrc
+            self.net.flow_frac = self.cw_flow / self.Q_cw if self.Q_cw > 0 else 0.0
+            self.net.step(dt, Lz, P_coil_to_water=P_c2w, P_other_water=q_hex)
+            self.T_cw = self.net.T_w
+            self._L = Lz
+            self._accum(dt, Lz)
+            self._protect()
         return s
+
+    # ----------------------------------------------------------- 器件温升 / 保护 / 损耗平均
+    def k_rip(self):
+        """母线电解电容 300 Hz 纹波电流 / 直流电流（额定功率点的整流时域仿真，按比例用于其它功率；估算）。"""
+        if self._k_rip is None:
+            sp = self.sp
+            r = rectifier_pf(int(round(sp.rated_kW)), V_ll=sp.V_ll, L=sp.L_line, Rs=sp.Rs, C=sp.C_bus)
+            self._k_rip = r["I_cap_rms"] / (r["P"] / r["Vdc"])
+        return self._k_rip
+
+    def _protect(self):
+        n, m, cs = self.net, self.sp.mod, self.sp.cool
+        if self.ctl.fault or not self.ctl.running:
+            return
+        if n.T_plate >= m.T_ntc_trip:
+            self.ctl.ext_trip = ("OT", f"IGBT 基板过温 {n.T_plate:.0f}°C ≥ {m.T_ntc_trip:.0f}°C")
+        elif n.T_w >= cs.T_trip_in:
+            self.ctl.ext_trip = ("WT", f"冷却进水 {n.T_w:.1f}°C ≥ {cs.T_trip_in:.0f}°C")
+
+    LOSS_KEYS = ("pos_T", "pos_D", "rect", "tr_cu", "tr_core", "cap", "bus_can", "P_c2w", "q_hex", "P_coil", "P_wp", "P_in", "P_grid", "inv_total")
+
+    def _accum(self, dt, Lz):
+        if self._acc is None:
+            self._acc = dict.fromkeys(self.LOSS_KEYS, 0.0); self._acc["_t"] = 0.0
+        for k in self.LOSS_KEYS:
+            self._acc[k] += Lz.get(k, 0.0) * dt
+        self._acc["_t"] += dt
+
+    def mark(self):
+        """记一个累计点（长时间外推按两个标记之间的平均损耗）。"""
+        self._acc_hist.append((self.t, dict(self._acc or {})))
+
+    def avg_losses(self, t0_mark=-2, t1_mark=-1):
+        a0 = self._acc_hist[t0_mark][1]; a1 = self._acc_hist[t1_mark][1]
+        T = a1["_t"] - a0.get("_t", 0.0)
+        return {k: (a1[k] - a0.get(k, 0.0)) / T for k in self.LOSS_KEYS}, T
 
     def _tank_heat(self, dE, dt):
         self.T_tank += dE / (CP_PAG * self.V_tank * 1.0)
 
     def _tank_step(self, dt):
         UA = self.UA * (min(self.cw_flow / self.Q_cw, 1.3) ** 0.6 if self.Q_cw > 0 else 0.0)
-        q = UA * (self.T_tank - self.T_cw) + 16.0 * (self.T_tank - self.T_amb)
+        q_hex = UA * (self.T_tank - self.T_cw)
+        q = q_hex + 16.0 * (self.T_tank - self.T_amb)
         self.T_tank -= q * dt / (CP_PAG * self.V_tank)
+        return q_hex
 
     # ----------------------------------------------------------- 工件流转与事件
     def _detect_events(self, X, Y):
+        if self.load in ("burnin", "heavy"):
+            return
         p = self.part
         m0 = self.plc.bits.get("M0", False)
         if p is not None:
@@ -314,6 +405,18 @@ class Machine:
             self.scrapped += 1
 
     def _logrow(self, s, ipk, Y, X):
+        st0 = [int(d[1:]) for d in self.plc.bits if d.startswith("S") and self.plc.bits[d]]
+        self._st_now = max(st0) if st0 else 0
+        self._log_n += 1
+        if self._log_n % self._log_stride:
+            return self._plc_events()
+        if len(self.log["t"]) >= self.LOG_MAX:
+            for k in self.log:
+                self.log[k] = self.log[k][::2]
+            self.ylog = self.ylog[::2]; self.xlog = self.xlog[::2]
+            self._log_stride *= 2
+            if self._log_n % self._log_stride:
+                return self._plc_events()
         L = self.log
         L["t"].append(self.t); L["Vbus"].append(self.bus.V); L["I_src"].append(self.bus.I_src)
         L["f"].append(self.ctl.f / 1e3 if self.ctl.running else 0.0)
@@ -325,8 +428,19 @@ class Machine:
         L["step"].append(max(st) if st else 0)
         L["ready"].append(int(self.ctl.ready)); L["fault"].append(int(bool(self.ctl.fault))); L["run"].append(int(self.ctl.running))
         L["reached"].append(int(self.ctl.reached)); L["P_ref"].append(self.ctl.p_ref / 1e3)
+        if self.net is not None:
+            T = self.net.temps(); Lz = getattr(self, "_L", {})
+            L["Tj"].append(T["Tj_T"]); L["T_plate"].append(T["T_plate"]); L["T_w"].append(T["T_w"]); L["T_cap"].append(T["T_cap"])
+            L["T_tr"].append(T["T_tr"]); L["T_cab"].append(T["T_cab"]); L["P_invloss"].append(Lz.get("inv_total", 0.0) / 1e3)
+            L["Vc"].append(Lz.get("Vc", 0.0)); L["phi"].append(Lz.get("phi_deg", 0.0)); L["I_off"].append(Lz.get("I_off", 0.0))
+        else:
+            for k in ("Tj", "T_plate", "T_w", "T_cap", "T_tr", "T_cab", "P_invloss", "Vc", "phi", "I_off"):
+                L[k].append(np.nan)
         self.ylog.append([int(Y[f"Y{i:03o}"]) for i in range(8)])
         self.xlog.append([int(X.get(x, False)) for x in ("X004", "X005", "X010", "X011", "X012", "X013", "X020", "X040")])
+        self._plc_events()
+
+    def _plc_events(self):
         m = self.plc.bits
         for k in ("M0", "M9", "M300", "M301", "M302", "M303", "M304"):
             v = bool(m.get(k, False)); key = "_prev_" + k
@@ -336,10 +450,10 @@ class Machine:
                          "M303": "报警：线圈下降超时", "M304": "报警：变频器就绪超时"}
                 self.ev(f"PLC {names[k]} {'ON' if v else 'OFF'}")
         for key, txt in (("ready", "变频器就绪"), ("fault", "变频器故障")):
-            v = bool(L[key][-1]); kk = "_p2_" + key
+            v = bool(self.ctl.ready if key == "ready" else self.ctl.fault); kk = "_p2_" + key
             if v != getattr(self, kk, False):
                 setattr(self, kk, v); self.ev(f"变频器 {txt} {'ON' if v else 'OFF'}" + (f"（{self.ctl.fault_log[-1][2]}）" if key == "fault" and v and self.ctl.fault_log else ""))
-        st = L["step"][-1]
+        st = self._st_now
         if st != getattr(self, "_prev_step", -1):
             self._prev_step = st
             nm = {0: "待机", 10: "S10 开冷却水并等流量", 11: "S11 母线预充电", 12: "S12 合旁路等变频器就绪", 13: "S13 待料", 20: "S20 线圈下降",
@@ -366,3 +480,44 @@ class Machine:
         self.T_tank = T_ss + (T0 - T_ss) * math.exp(-hours * 3600 / tau)
         self.ev(f"【快进 {hours:g} 小时】水箱 {T0:.1f}°C → {self.T_tank:.1f}°C（稳态 {T_ss:.1f}°C，时间常数 {tau/3600:.2f} h，节拍 {takt:.1f} s）")
         return dict(T0=T0, T1=self.T_tank, T_ss=T_ss, tau_h=tau / 3600, takt=takt, q_avg=q_avg)
+
+    # ----------------------------------------------------------- 长时间温升外推（8 h 等）
+    def longrun_thermal(self, hours, dt=2.0, Lavg=None, rec_every=60.0, T_amb=None):
+        """用最近两个 mark() 之间的平均损耗（满载老化=恒定；生产=若干个完整节拍的平均）把冷却水回路、IGBT 冷板/结温、
+        变压器、谐振电容、电解电容、柜内空气、线圈、淬火水箱一起推进 hours 小时（dt 秒一步，指数精确更新）。
+        结温的节拍内波动另由 Tj_swing（详细仿真最后一个节拍）叠加。返回时间序列与是否跳闸。"""
+        if Lavg is None:
+            Lavg, _ = self.avg_losses()
+        n = self.net
+        if T_amb is not None:
+            n.T_amb = T_amb
+        sp = self.sp
+        Gw = sp.G_water * min(self.cw_flow / self.Q_cw, 1.3) ** 0.8 if self.Q_cw > 0 else 0.0
+        q_tank = self.E_tank_total / max(self.t, 1.0) if self.load != "burnin" else 0.0   # 淬火带进水箱的平均热 W
+        out = {k: [] for k in ("h", "T_w", "Tj", "T_plate", "T_tr", "T_cap", "T_can", "T_cab", "T_coil", "T_tank", "Q_ch")}
+        t = 0.0; trip = None; next_rec = 0.0; T_end = hours * 3600
+        while t < T_end - 1e-9:
+            T_coil_ss = n.T_w + Lavg["P_coil"] / max(Gw, 1e-6)
+            self.T_coil = T_coil_ss + (self.T_coil - T_coil_ss) * math.exp(-dt * Gw / sp.C_coil)
+            P_c2w = Lavg["P_coil"]
+            UA = self.UA * (min(self.cw_flow / self.Q_cw, 1.3) ** 0.6 if self.Q_cw > 0 else 0.0)
+            q_hex = UA * (self.T_tank - n.T_w)
+            self.T_tank += dt * (q_tank - q_hex - 16.0 * (self.T_tank - n.T_amb)) / (CP_PAG * self.V_tank)
+            n.step(dt, Lavg, P_coil_to_water=P_c2w, P_other_water=q_hex)
+            t += dt
+            if trip is None:
+                if n.T_plate >= sp.mod.T_ntc_trip:
+                    trip = (t / 3600, "OT", f"IGBT 基板过温 {n.T_plate:.0f}°C")
+                elif n.T_w >= sp.cool.T_trip_in:
+                    trip = (t / 3600, "WT", f"冷却进水 {n.T_w:.1f}°C ≥ {sp.cool.T_trip_in:.0f}°C")
+                if trip is not None:
+                    self.ev(f"【长时间外推】第 {trip[0]:.2f} h 保护动作：{trip[2]}（之后按停机继续冷却外推）")
+                    Lavg = {k: 0.0 for k in Lavg}; Lavg["P_coil"] = 0.0; q_tank = 0.0
+            if t >= next_rec - 1e-9:
+                T = n.temps()
+                out["h"].append(t / 3600); out["T_w"].append(T["T_w"]); out["Tj"].append(T["Tj_T"]); out["T_plate"].append(T["T_plate"])
+                out["T_tr"].append(T["T_tr"]); out["T_cap"].append(T["T_cap"]); out["T_can"].append(T["T_can"]); out["T_cab"].append(T["T_cab"])
+                out["T_coil"].append(self.T_coil); out["T_tank"].append(self.T_tank); out["Q_ch"].append(n.Q_ch)
+                next_rec += rec_every
+        self.t_longrun_h = hours
+        return dict(series={k: np.array(v) for k, v in out.items()}, trip=trip, Lavg=Lavg, q_tank=q_tank)
