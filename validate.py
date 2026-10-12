@@ -147,3 +147,5 @@ else:
     mi = measure(w.x[m], w["i(vcoil)"][m]); ms = measure(w.x[m], w["sw"][m])
     print("半桥演示（只做冒烟检查，无解析对比）：开关频率 %.0f Hz（设定 40000），开关节点 %.1f~%.1f V，线圈电流 %.1f A 峰值 / %.1f A 有效值" % (
         ms["频率"], ms["Vmin"], ms["Vmax"], mi["Vmax"], mi["Vrms"]))
+
+
