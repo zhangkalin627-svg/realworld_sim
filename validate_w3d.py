@@ -1,7 +1,8 @@
 """v0.10 三维装配世界检验 (validate.py 末尾会调用): MuJoCo 刚体 + 梁体检 vs 力学理论"""
 import numpy as np
 from rw.world3d.scene import Scene
-from rw.world3d.presets import beam_bridge, harmonic_stack, ramp, table_cart, ibeam_bridge, wall_bracket, bearing_rotor, glass_drop
+from rw.world3d.presets import beam_bridge, harmonic_stack, ramp, table_cart, ibeam_bridge, wall_bracket, bearing_rotor, glass_drop, weld_bracket
+from rw.world3d.fracture import break_and_rerun
 from rw.world3d import profile as _prof
 from rw.world3d import joints as _jnt
 from rw.world3d.physics import simulate, check, float_check
@@ -141,6 +142,25 @@ def run():
     b1 = [x for x in r1["beams"] if x["name"] == "玻璃板"][0]; b2 = [x for x in r2["beams"] if x["name"] == "玻璃板"][0]
     print(f"[12m] 断裂判据: 理论断裂载荷 {F_break/G:.1f} kg（点载荷近似，实际分布载荷略高）；20 kg → σ={b1['sigma']:.0f} MPa {b1['status']}，80 kg → σ={b2['sigma']:.0f} MPa {b2['status']}")
     assert b1["status"] == "正常" and b2["status"] == "断裂" and r2["broken"]
+    # n) 焊缝群：悬臂焊墙，σ/τ vs 手算
+    s = weld_bracket(); r = simulate(s, tmax=2.5); c = check(r)
+    wd = c["bolts"][0]
+    Wa = s.get("悬臂").mass * G; Wb = s.get("钢块").mass * G
+    M1 = Wa * 150 + Wb * 250                      # N·mm 绕 y
+    a_eff = 0.7 * 6; SL = 160.0; Iu = 2 * 80 * 10 ** 2
+    sig_th = M1 * 10 / (a_eff * Iu); tau_th = (Wa + Wb) / (a_eff * SL)
+    print(f"[12n] 焊缝群: σ_b 仿真 {wd['sig_b']:.2f} vs 手算 {sig_th:.2f} MPa，τ {wd['tau']:.2f} vs {tau_th:.2f} MPa，利用率 {wd['util']:.4f} ok={wd['ok']}")
+    assert abs(wd["sig_b"] / sig_th - 1) < 0.02 and abs(wd["tau"] / tau_th - 1) < 0.02 and wd["ok"]
+    # o) 断裂后果：玻璃板断裂 → 分裂再仿真 → 两段失去支撑下落
+    s = glass_drop(80); r = simulate(s, tmax=2.5); c = check(r)
+    out = break_and_rerun(r, c, tmax=3)
+    assert out is not None
+    s2, r2, c2 = out
+    seg = [x for x in c2["stability"] if "玻璃板" in x["body"]]
+    blk = [x for x in c2["stability"] if "钢块" in x["body"]][0]
+    print(f"[12o] 断裂后果: 断成 {len([p for p in s2.parts if '玻璃板' in p.name])} 段；左/右段状态: "
+          f"{[x['status'] for x in seg]}；钢块下落 { -blk['dz_mm']:.0f} mm（断后不再被托住）")
+    assert any(x["status"] != "稳定" for x in seg) and blk["dz_mm"] < -50
     print("[12] 三维装配世界 全部通过")
 
 
