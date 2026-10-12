@@ -23,6 +23,7 @@ class JobStore:
             c.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)",
                       (jid, module, json.dumps(params, ensure_ascii=False), "running", 0.0, None, None,
                        time.time(), time.time()))
+            c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)")
 
     def set_progress(self, jid, frac):
         with self._lock, self._conn() as c:

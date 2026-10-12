@@ -551,6 +551,8 @@ class InductionQuenchSim:
 def find_power(target_C=900.0, which="surface", tol=10.0, p0=5.0, **kw):
     """自动找功率：加热结束时淬火区中部（外表面 / 内孔）温度 = 目标值。
     对应实际设备里"红外测温闭环"或调功率试烧的过程。返回 kW。"""
+    if target_C > M.STEEL_45["T_melt"]:
+        raise ValueError(f"目标温度 {target_C:.0f}°C 超过 45 钢固相线 {M.STEEL_45['T_melt']:.0f}°C：物理上不可达，请检查目标温度")
     kw = dict(kw)
     kw.update(t_quench=0.0, t_air=0.0, t_delay=0.0)
     key = "T_surf_end_heat" if which == "surface" else "T_inner_end_heat"
@@ -570,4 +572,5 @@ def find_power(target_C=900.0, which="surface", tol=10.0, p0=5.0, **kw):
         if abs(T2 - target_C) < tol:
             return P2
         P1, T1 = P2, T2
-    return P1
+    raise ValueError(f"自动调功率 8 轮未收敛：最近 {P1:.2f} kW 只能到 {T1:.0f}°C（目标 {target_C:.0f}°C）。"
+                     "该工件/频率组合可能达不到目标温度，或加热时间太短")

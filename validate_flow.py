@@ -158,3 +158,7 @@ def run():
     assert abs(qa - qb) < 1e-9 and abs(qp - qa - qb) < 1e-9 and nn.converged
     print(f"[13j] 示例两工位喷淋: 泵 {qp*6e4:.1f} L/min = 2×{qa*6e4:.1f}，泵轴功率 {rr['links']['离心泵']['P_shaft']:.0f} W，射流 {rr['links']['喷淋孔A']['v_jet']:.1f} m/s")
     print("      全部通过")
+
+
+if __name__ == "__main__":
+    run()

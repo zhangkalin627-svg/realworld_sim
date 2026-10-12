@@ -25,6 +25,11 @@ def _f2(x, nd=2):
     return f"{x:.{nd}f}" if isinstance(x, (int, float)) and x == x else "—"   # NaN 显示为 —
 
 
+def _num(x, nd=0, scale=1.0):
+    """NaN/None 安全的数值格式化（如功率为 0 时效率是 0/0=NaN）。"""
+    return f"{x * scale:.{nd}f}" if isinstance(x, (int, float)) and x == x else "—"
+
+
 def _svg(fig):
     b = io.StringIO()
     fig.savefig(b, format="svg", bbox_inches="tight")
@@ -72,16 +77,16 @@ def run_induction(params, progress):
     sim = InductionQuenchSim(**kw)
     r = _clean(sim.run(progress=lambda f: progress(0.05 + 0.95 * f)))
     lines = [
-        f"频率 {r['freq_kHz']:.0f} kHz，工件吸收 {r['power_kW']:.2f} kW",
-        f"透入深度：冷态 {r['skin_cold_mm']:.2f} mm，热态(>居里点) {r['skin_hot_mm']:.2f} mm",
-        f"加热结束：外表面 {r['T_surf_end_heat']:.0f}°C，内孔 {r['T_inner_end_heat']:.0f}°C，最高 {r['T_max']:.0f}°C",
-        f"线圈电流约 {r['coil_current_A']:.0f} A(有效值)，线圈铜损约 {r['coil_loss_kW']:.2f} kW，电效率约 {r['efficiency']*100:.0f}%",
+        f"频率 {_num(r['freq_kHz'])} kHz，工件吸收 {_num(r['power_kW'], 2)} kW",
+        f"透入深度：冷态 {_num(r['skin_cold_mm'], 2)} mm，热态(>居里点) {_num(r['skin_hot_mm'], 2)} mm",
+        f"加热结束：外表面 {_num(r['T_surf_end_heat'])}°C，内孔 {_num(r['T_inner_end_heat'])}°C，最高 {_num(r['T_max'])}°C",
+        f"线圈电流约 {_num(r['coil_current_A'])} A(有效值)，线圈铜损约 {_num(r['coil_loss_kW'], 2)} kW，电效率约 {_num(r['efficiency'], 0, 100)}%",
         f"淬火：{r['medium']}，t8/5 外表面 {_f2(r['t85_surface'])} s / 内孔 {_f2(r['t85_inner'])} s",
-        f"硬度(估算)：外表面 {r['HRC_surface']:.0f} HRC，内孔 {r['HRC_inner']:.0f} HRC",
-        f"有效硬化层 (≥50 HRC)：{r['case_depth_mm']:.2f} mm" + ("，已淬透" if r['through_hardened'] else ""),
+        f"硬度(估算)：外表面 {_num(r['HRC_surface'])} HRC，内孔 {_num(r['HRC_inner'])} HRC",
+        f"有效硬化层 (≥50 HRC)：{_num(r['case_depth_mm'], 2)} mm" + ("，已淬透" if r['through_hardened'] else ""),
     ]
     if r.get("nonlinear"):
-        lines.insert(1, "磁导率：非线性 B-H(含居里点)" + (f"；导磁体 {r['conc']}，其损耗 {r['conc_loss_kW']:.2f} kW" if r.get("conc") else ""))
+        lines.insert(1, "磁导率：非线性 B-H(含居里点)" + (f"；导磁体 {r['conc']}，其损耗 {_num(r['conc_loss_kW'], 2)} kW" if r.get("conc") else ""))
     plots = [_plot(sim, "temp", "加热结束温度场"), _plot(sim, "hrc", "淬火后硬度（估算）"),
              _plot(sim, "curve", "监测点温度 / 线圈电流"), _plot(sim, "line", "淬火区中部：硬度随深度")]
     return {"lines": lines, "warnings": r["warnings"], "plots": plots, "raw": r}

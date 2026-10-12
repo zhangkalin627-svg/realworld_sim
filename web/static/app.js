@@ -75,23 +75,27 @@ $('#runbtn').onclick = async () => {
   poll(r.job);
 };
 
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function renderResult(j) {
   $('#runbtn').disabled = false;
   $('#bar').style.display = 'none';
   if (j.status === 'error' || j.status === 'interrupted') {
-    $('#status').innerHTML = `<span class="err">${j.status === 'interrupted' ? '任务被服务器重启中断（参数已保留，可重新提交）' : '出错了：'}\n${j.error || ''}</span>`;
+    $('#status').innerHTML = `<span class="err">${j.status === 'interrupted' ? '任务被服务器重启中断（参数已保留，可重新提交）' : '出错了：'}\n${esc(j.error || '')}</span>`;
     return;
   }
   const r = j.result;
   $('#status').textContent = '完成';
   $('#lines').textContent = r.lines.join('\n');
-  $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${w}</div>`).join('');
+  $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${esc(w)}</div>`).join('');
   $('#plots').innerHTML = (r.plots || []).map(p => p.svg).join('');
   if (r.viewer) {
     const vd = document.createElement('div'); vd.id = 'v3d';
     $('#plots').appendChild(vd);
     import('/viewer3d.js').then(m => m.show(vd, r.viewer)).catch(e => {
-      vd.innerHTML = '<span class="err">3D 查看器加载失败: ' + e + '</span>';
+      vd.innerHTML = '<span class="err">3D 查看器加载失败: ' + esc(e) + '</span>';
     });
   }
 }
@@ -115,7 +119,7 @@ async function loadJobs() {
   host.innerHTML = r.jobs.map(j => {
     const t = new Date(j.created * 1000);
     const icon = {done: '✅', running: '⏳', error: '❌', interrupted: '⛔'}[j.status] || '?';
-    return `<div class="jobrow" data-jid="${j.id}">${icon} ${names[j.module] || j.module} <span class="muted">${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span></div>`;
+    return `<div class="jobrow" data-jid="${j.id}">${icon} ${esc(names[j.module] || j.module)} <span class="muted">${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span></div>`;
   }).join('');
   host.querySelectorAll('.jobrow').forEach(el => el.onclick = async () => {
     const j = await (await fetch(`/api/job/${el.dataset.jid}`)).json();

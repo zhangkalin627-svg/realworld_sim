@@ -114,4 +114,34 @@ assert n == 1 and st3.get("fake1")["status"] == "interrupted", "running 任务�
 assert st3.get(list(lst["jobs"])[0]["id"])["status"] == "done", "已完成任务不应被误标"
 assert "参数已保留" in st3.get("fake1")["error"]
 print(f"[web-i] 任务持久化 OK ({time.time()-t0:.0f}s): SQLite 落盘, 重启历史保留, running→interrupted 清理正确")
+t0 = time.time()
+# 反馈 B-1：power_kw=0 时效率 0/0=NaN，摘要文本不得崩（runner 级，绕过 API 收口）
+from web.modules import run_induction, MODULES as _M
+r = run_induction({"mode": "power", "power_kw": 0.0, "t_heat": 0.5, "t_quench": 0.5, "t_air": 0.2}, lambda f: None)
+assert any("—" in l for l in r["lines"]), "NaN 字段应显示为 —"
+# 反馈 B-3a：非数字 → 400 友好提示
+bad = c.post("/api/sim/induction", json={"params": {"power_kw": "abc"}})
+assert bad.status_code == 400 and "需要数字" in bad.json()["detail"], bad.text[:200]
+# 反馈 B-3b：非法枚举 → 400
+bad = c.post("/api/sim/induction", json={"params": {"medium": "liquid_nitrogen"}})
+assert bad.status_code == 400 and "不在可选范围" in bad.json()["detail"], bad.text[:200]
+# 反馈 B-2：越界数字收口而不是除零崩溃
+j = run_wait("flow_net", {"holes": 0, "dh": 0})
+assert j["status"] == "done", f"holes/dh=0 应收口到最小值跑通: {j.get('error', '?')[:150]}"
+j = run_wait("world3d", {"preset": "工字钢梁桥", "tmax": 0})
+assert j["status"] == "done", f"tmax=0 应收口: {j.get('error', '?')[:150]}"
+# 数字选项的 select 传字符串（前端就是字符串）必须过校验
+from web.server import _validate_params
+_mod = next(m for m in _M if m["key"] == "induction")
+_validate_params(_mod, {"freq": "30"})
+# 反馈 B-4：物理不可达目标温度 → 快速明确报错（不能挂住线程池）
+t1 = time.time()
+j = run_wait("induction", {"mode": "target", "target": 5000, "t_heat": 1.0}, timeout=60)
+assert time.time() - t1 < 30, "不可达温度必须快速失败"
+assert j["status"] == "error" and "熔点" in j["error"] or "固相线" in j["error"], j.get("error", "?")[:200]
+# 反馈 B-5：错误不回 traceback/服务器路径
+assert "Traceback" not in j["error"] and "/home" not in j["error"] and "web/" not in j["error"], j["error"][:200]
+j = run_wait("plc", {"program": "LD X000\nOUT Y000"})
+assert j["status"] == "error" and "END" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
+print(f"[web-j] 两封反馈修复回归 OK ({time.time()-t0:.0f}s): NaN文本/400校验/越界收口/不可达温度快速失败/错误不泄堆栈")
 print("web 冒烟测试全部通过")
