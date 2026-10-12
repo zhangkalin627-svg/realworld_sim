@@ -250,3 +250,89 @@ MODULES = [
      ],
      "run": _mcu},
 ]
+
+
+
+
+def run_circuit(params, progress):
+    from rw.circuit import examples as EX, scope as sc, spice, kicad
+    if not spice.find_ngspice():
+        raise ValueError("服务器未安装 ngspice，电路仿真暂不可用。安装：sudo apt install ngspice（或设 RW_NGSPICE 指向可执行文件）")
+    custom = (params.get("custom_netlist") or "").strip()
+    lines, warns, raw_meas = [], [], {}
+    progress(0.1)
+    if custom:
+        c = kicad.import_spice(None, text=custom)
+        w = c.tran(step=_num(params, "tstep", 1e-5), stop=_num(params, "tstop", 1e-2))
+        name, theory, chans, wa = "自定义网表", "", (w.nets() or [])[:4], None
+    else:
+        ex = EX.get(params.get("example") or "rc")
+        name, theory = ex.name, ex.theory
+        w = ex.circuit.tran(**ex.tran)
+        chans = [n for n, _, _ in ex.scope["ch"]]
+        wa = ex.circuit.ac(**ex.ac) if ex.ac else None
+    progress(0.7)
+    lines.append(f"{name}（瞬态 {len(w.x)} 点）")
+    if theory:
+        lines.append(f"理论：{theory}")
+
+    def _eng(v, unit):
+        return "-" if v is None else f"{spice.fmt(v)}{unit}"
+
+    for ch in chans:
+        try:
+            y = np.asarray(w[ch], float)
+        except Exception:
+            continue
+        m = sc.measure(w.time, y)
+        raw_meas[ch] = dict(m)
+        parts = [f"Vpp {_eng(m.get('Vpp'), 'V')}", f"Vrms {_eng(m.get('Vrms'), 'V')}"]
+        if m.get("频率"):
+            parts.append(f"f {_eng(m['频率'], 'Hz')}")
+        if m.get("占空比") is not None:
+            parts.append(f"占空比 {m['占空比'] * 100:.1f}%")
+        if m.get("上升时间"):
+            parts.append(f"tr {_eng(m['上升时间'], 's')}")
+        lines.append(f"· {ch}：" + "，".join(parts))
+    warns += list(w.warnings)
+
+    plots = []
+    fig, ax = plt.subplots(figsize=(7, 4.2))
+    for ch in chans:
+        try:
+            ax.plot(w.time, w[ch], lw=1.2, label=ch)
+        except Exception:
+            pass
+    ax.set_xlabel("t (s)"); ax.set_ylabel("V")
+    ax.legend(fontsize=9); ax.set_title(f"{name} · 瞬态波形")
+    plots.append({"title": "波形图", "svg": _svg(fig)})
+    if chans:
+        try:
+            f, db, _ = sc.fft_dbv(w.time, np.asarray(w[chans[0]], float))
+            fig, ax = plt.subplots(figsize=(7, 3.2))
+            ax.semilogx(f[1:], db[1:], lw=1)
+            ax.set_xlabel("f (Hz)"); ax.set_ylabel("dBV"); ax.set_title(f"{chans[0]} 频谱")
+            plots.append({"title": "频谱", "svg": _svg(fig)})
+        except Exception:
+            pass
+    if wa is not None:
+        node = chans[-1]
+        v = np.asarray(wa[node])
+        fig, (a1, a2) = plt.subplots(2, 1, figsize=(7, 4.6), sharex=True)
+        a1.semilogx(wa.freq, 20 * np.log10(np.maximum(np.abs(v), 1e-15)), lw=1.2); a1.set_ylabel("dB"); a1.grid(True, alpha=.3)
+        a2.semilogx(wa.freq, np.degrees(np.angle(v)), lw=1.2); a2.set_ylabel("°"); a2.set_xlabel("f (Hz)"); a2.grid(True, alpha=.3)
+        a1.set_title(f"{node} 频率响应")
+        plots.append({"title": "频率响应", "svg": _svg(fig)})
+    progress(1.0)
+    return {"lines": lines, "warnings": warns, "plots": plots, "raw": {"measurements": raw_meas, "points": len(w.x)}}
+
+
+MODULES.append({"key": "circuit", "name": "电路仿真", "desc": "示例电路或自定义 SPICE 网表 → ngspice 瞬态/交流仿真 → 自动测量（Vpp/Vrms/频率/占空比/上升时间）+ 波形/频谱/频率响应图（需服务器装 ngspice）",
+    "fields": [
+        {"name": "example", "label": "示例电路", "type": "select", "default": "rc",
+         "options": [{"v": "rc", "t": "RC 方波响应"}, {"v": "rlc", "t": "RLC 串联谐振"}, {"v": "rect", "t": "桥式整流 + 电容滤波"}, {"v": "astable", "t": "运放方波振荡器"}, {"v": "halfbridge", "t": "MOSFET 半桥 + 串联谐振"}]},
+        {"name": "custom_netlist", "label": "自定义 SPICE 网表（可选，填了就忽略示例）", "type": "textarea", "default": ""},
+        {"name": "tstep", "label": "自定义：步长 s", "type": "number", "default": 1e-5, "min": 1e-9, "max": 1e-1, "step": 1e-6},
+        {"name": "tstop", "label": "自定义：终止 s", "type": "number", "default": 1e-2, "min": 1e-6, "max": 10.0, "step": 1e-3},
+    ],
+    "run": run_circuit})
