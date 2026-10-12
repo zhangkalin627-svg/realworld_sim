@@ -79,6 +79,15 @@ inr = []
 for k in ("Constantan", "H62", "H68", "Monel400", "Cr20Ni80", "QSn6.5-0.1", "Invar36", "304"):
     r = mix(GRADES[k]["comp"]); lo, hi = r["resist_range"]; inr.append(lo <= GRADES[k]["resist"] <= hi)
 print("固溶体电阻率：实测落在估算范围内 %d/%d 个牌号" % (sum(inr), len(inr)))
+# 7b) v0.30 issue 1928：mix 非有限/非数值输入一律 ValueError（NaN 曾静默丢弃、Inf 抛 KeyError）
+_bad = 0
+for _c in ({"Fe": float("nan"), "Cu": 1}, {"Fe": float("inf"), "Cu": 1}, {"Fe": "50"}, {"Fe": True}):
+    try:
+        mix(_c)
+    except ValueError:
+        _bad += 1
+assert _bad == 4, _bad
+print("mix 边界：NaN/Inf/字符串/布尔 4 种非法输入均 ValueError（issue 1928）")
 # 8) 电路仿真（ngspice）+ 虚拟示波器：和解析解对比
 # 8h) v0.27.1 构造器兼容回归：旧位置参数调用语义不变（卡布审查发现 dT_em 插入中间导致错位）
 from inspect import signature as _sig

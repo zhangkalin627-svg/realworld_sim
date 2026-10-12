@@ -172,8 +172,13 @@ def short_transients(sp, s_pre, Vbus):
     f = s_pre.get("f", 25e3)
     res = {}
     for prot in ("hw", "sw", "none"):
+        # v0.30 issue 1821：硬件路径加谐振电容过压比较器（动作点 = 额定峰值的 95%）。
+        # 只靠过流比较器时短路后电容冲到 3157 V > 额定峰值 2828 V；加快压比较器后约 3130 V，
+        # 仍超额定 10%——快速关断无法完全压住（关断后电感储能继续灌入电容），残差如实进 verdict
+        vc_peak_rated = getattr(getattr(sp, "cs", None), "Vc_rated", 2000.0) * math.sqrt(2)
         res[prot] = ST.fault_transient(L, sp.C_res, Rc + Rw, Vbus, f, L_short=1e-9 + 0.0 * L, R_short=Rw, prot=prot,
-                                       I_trip=sp.I_trip_pk, t_end=1.8e-3, dt=25e-9)
+                                       I_trip=sp.I_trip_pk, t_end=1.8e-3, dt=25e-9,
+                                       V_trip=(0.95 * vc_peak_rated if prot == "hw" else None))
     return res
 
 
@@ -360,8 +365,13 @@ def _verdicts_100k(m, S):
         tr = S["tr"]; hw, sw, no = tr["hw"], tr["sw"], tr["none"]
         lim_v = cs.Vc_rated * math.sqrt(2)
         def lvl(r):
-            return "OK" if r["I_pk_after"] < mod.I_crm and r["Vc_pk"] < 1.5 * lim_v else "FAIL"
-        v.append((lvl(hw), f"负载短路 + 硬件过流比较器（{sp.I_trip_pk:.0f} A，2 µs）：{(hw['t_off'] - 0.4e-3)*1e6:.0f} µs 后全关，电流峰值 {hw['I_pk_after']:.0f} A，电容峰值 {hw['Vc_pk']:.0f} V"))
+            if r["I_pk_after"] >= mod.I_crm or r["Vc_pk"] >= 1.5 * lim_v:
+                return "FAIL"
+            return "OK" if r["Vc_pk"] < lim_v else "WARN"   # v0.30 issue 1821：超额定峰值即 WARN，不再被 1.5× 掩盖
+        over = hw["Vc_pk"] / lim_v
+        note = "" if over < 1 else f"；电容峰值超额定 {100*(over-1):.0f}%（额定峰值 {lim_v:.0f} V）：快速关断压不住（电感储能续灌），选型须按 {hw['Vc_pk']*1.15/1000:.1f} kV+ 或加吸收回路"
+        cause_zh = {"OC": "过流", "VC": "电容过压", None: "未"}.get(hw.get("trip_cause"), "未")
+        v.append((lvl(hw), f"负载短路 + 硬件比较器（过流 {sp.I_trip_pk:.0f} A / 电容过压 {0.95*lim_v:.0f} V，2 µs）：{cause_zh}比较器 {(hw['t_off'] - 0.4e-3)*1e6:.0f} µs 后全关，电流峰值 {hw['I_pk_after']:.0f} A，电容峰值 {hw['Vc_pk']:.0f} V{note}"))
         v.append((lvl(sw), f"负载短路 + 只有 1 kHz 软件保护：{(sw['t_off'] - 0.4e-3)*1e3 if sw['t_off'] else float('nan'):.2f} ms 后才关，电流峰值 {sw['I_pk_after']:.0f} A（I_CRM {mod.I_crm:.0f}），"
                              f"谐振电容峰值 {sw['Vc_pk']:.0f} V（额定峰值 {lim_v:.0f} V）"))
         v.append(("WARN", f"不保护时：电流向 {no['I_pk_after']:.0f} A 峰值发展、电容 {no['Vc_pk']:.0f} V 峰值（短路前 {no['I_pk_before']:.0f} A / {no['Vc_pk_before']:.0f} V）"))

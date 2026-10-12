@@ -38,6 +38,27 @@ def run():
     r = DL.ratings_from_text("Chemi-Con LXM 150uF 450V") ; r2 = DL.ratings_from_text("WE-HCF 150uH 8.4A")
     chk("1 额定电压/电流存为参数", r.get("V") == 450 and r2.get("A") == 8.4, f"{r} {r2}")
 
+    # 1b) issue 1945（v0.30）：值统一提取——comp value / fields Value（大小写）/ 位置式 property 都能读出 R 值；冲突以 comp value 为准
+    def _net1945(kind, v):
+        cc = {"comp": f'(value "{v}") (fields (field (name "Sim.Device") "R"))',
+              "field-upper": f'(fields (field (name "Value") "{v}") (field (name "Sim.Device") "R"))',
+              "field-lower": f'(fields (field (name "value") "{v}") (field (name "Sim.Device") "R"))',
+              "property": f'(property "Value" "{v}")(property "Sim.Device" "R")',
+              "dual": f'(value "1k") (property "Value" "2k") (fields (field (name "Sim.Device") "R"))'}[kind]
+        comp = f'(comp (ref "R1") {cc} (libsource (lib "Device") (part "R")))'
+        lp = '(libpart (lib "Device") (part "R") (pins (pin (num "1") (name "~")) (pin (num "2") (name "~"))))'
+        ns = '(net (code "1") (name "n") (node (ref "R1") (pin "1")))(net (code "2") (name "GND") (node (ref "R1") (pin "2")))'
+        return f'(export (version "E") (design (source "t")) (components {comp}) (libparts {lp}) (nets {ns}))'
+    got = {}
+    for kind in ("comp", "field-upper", "field-lower", "property", "dual"):
+        try:
+            xx = KI.import_kicad_net(None, _net1945(kind, "1k"))
+            got[kind] = xx.elements[0].value if xx.elements else None
+        except Exception as e:
+            got[kind] = type(e).__name__
+    chk("1b 值统一提取（comp/fields 大小写/位置式 property/冲突优先 comp value）",
+        all(float(v) == 1000.0 for v in got.values()), str(got))
+
     # 2) 小 KiCad 网表：IGBT C/G/E、NetTie、IR2181x、MIC4428、LDO、保险丝、变压器、功率二极管
     comps = " ".join([
         _comp("Q1", "IKW30N60DTP 600V 30A", "Device", "Q_NIGBT_GCE"), _comp("NT1", "NetTie", "Device", "NetTie_2"),
@@ -128,6 +149,19 @@ def run():
     chk("7 浪涌：峰值 1000 V、前沿 1.2 µs、半峰 50 µs（±10 %）", abs(pk - 1000) < 20 and abs(tf - 1.2e-6) < 0.12e-6 and abs(t_half - 50e-6) < 5e-6,
         "峰值 %.0f V，T1 %.2f µs，T2 %.1f µs" % (pk, tf * 1e6, t_half * 1e6))
 
+    # 7b) LL 浪涌极性：正浪涌正向叠加在 L1 相上，不得反向注入负尖峰（issue 1952，v0.30 修复）
+    if find_ngspice():
+        g = Circuit("surge-ll")
+        DL.add_grid(g, ("L1", "L2", "L3"), vll=380, f=50, surge=2, surge_mode="LL", surge_t0=0.01)
+        for ln in ("L1", "L2", "L3"):
+            g.R("load" + ln, ln, "0", 100)
+        wg = g.tran(2e-7, 0.011, tmax=2e-7)
+        v1 = np.asarray(wg["v(l1)"])
+        vph_pk = 380 * 2 ** 0.5 / 3 ** 0.5
+        chk("7b LL 浪涌极性：L1 正向叠加≈相峰+浪涌、无负向尖峰",
+            v1.max() > vph_pk + 700 and v1.min() > -1.3 * vph_pk,
+            "max %.0f V，min %.0f V（相峰 %.0f V）" % (v1.max(), v1.min(), vph_pk))
+
     # 8) 应力表分级：600 V 器件在 380/418/456 V 母线（≈电网线电压峰值）下 90/98/108 %
     rows = ST.table([("D", "反压", 380 * 2 ** 0.5, 600), ("D", "反压", 418 * 2 ** 0.5, 600), ("D", "反压", 456 * 2 ** 0.5, 600), ("R", "功率", 0.5, 1)])
     chk("8 应力分级 >80 % 黄、>100 % 红", [r["level"] for r in rows] == ["warn", "warn", "over", "ok"],
@@ -145,7 +179,11 @@ def run():
         SPm.check_exit(CP([], 137, "", "")); ok137 = False
     except SPm.SpiceError:
         ok137 = True
-    chk("9 check_exit：-9/137 抛带中文说明的错误，0 与普通非零不抛", ok9 and ok137 and SPm.check_exit(CP([], 0, "", "")) is None and "返回码 1" in SPm.check_exit(CP([], 1, "", "")))
+    try:
+        SPm.check_exit(CP([], 1, "", "some warning tail")); ok1 = False
+    except SPm.SpiceError as e:
+        ok1 = "返回码 1" in str(e) and "some warning tail" in str(e)
+    chk("9 check_exit：-9/137/普通非零均抛带说明的错误（普通非零不解析输出，issue 1955），0 不抛", ok9 and ok137 and ok1 and SPm.check_exit(CP([], 0, "", "")) is None)
     if find_ngspice():
         d = tempfile.mkdtemp(prefix="rwk_"); cir = os.path.join(d, "t.cir")
         open(cir, "w").write("* t\nV1 a 0 1\nR1 a 0 1k\n.tran 1u 10u\n.control\nrun\nwrdata t.dat v(a)\n.endc\n.end\n")

@@ -105,6 +105,10 @@ class Bus:
     """母线电容 + 预充电/旁路接触器。时间步 dt（≤ 几 ms）。"""
 
     def __init__(self, sp: Spec):
+        for f in ("R_pc", "R_bleed", "C_bus"):
+            v = getattr(sp, f)
+            if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+                raise ValueError(f"母线参数 {f} 必须为正的有限值，得到 {v!r}（issue 1823）")
         self.sp = sp; self.V = 0.0
         self.inrush_peak = 0.0; self.inrush_events = []
         self.E_src = 0.0; self.E_R = 0.0; self.E_bleed = 0.0; self.E_load = 0.0
@@ -137,6 +141,8 @@ class Bus:
         self.k1, self.k2 = k1, k2
 
     def step(self, dt, Vsrc, P_load):
+        if not (math.isfinite(dt) and dt > 0):
+            raise ValueError(f"母线步长 dt 必须为正的有限值，得到 {dt!r}（issue 1823）")
         sp = self.sp; V = max(self.V, 1e-3)
         Vold = self.V
         if self.k2:
@@ -147,16 +153,28 @@ class Bus:
             self.E_R += Isrc * Isrc * Rq * dt
         elif self.k1:
             # C dV/dt = (Vsrc − V)/Rpc − P/V − V/Rbleed（二极管单向，V>Vsrc 时不倒灌）
-            Ic = max((Vsrc - V) / sp.R_pc, 0.0)
+            # v0.30：指数精确 RC 更新（对任意 dt 稳定），替代显式 Euler——dt>τ 时旧格式
+            # 会过冲到非物理电压（dt=1 s 时 1295 V > 源 513 V，issue 1823）。负载电流按步
+            # 初电压冻结（一阶），能量项取中点电流（二阶）。
             Il = P_load / max(V, 20.0) if P_load > 0 else 0.0
-            Ib = V / sp.R_bleed
-            Vn = V + dt * (Ic - Il - Ib) / sp.C_bus
+            if Vsrc > V:
+                G = 1.0 / sp.R_pc + 1.0 / sp.R_bleed
+                tau = sp.C_bus / G
+                Vinf = (Vsrc / sp.R_pc - Il) / G
+            else:
+                tau = sp.C_bus * sp.R_bleed
+                Vinf = -Il * sp.R_bleed
+            Vn = Vinf + (V - Vinf) * math.exp(-dt / tau)
+            Vmid = 0.5 * (V + Vn)
+            Ic = max((Vsrc - Vmid) / sp.R_pc, 0.0)
             Isrc = Ic
             self.E_R += Ic * Ic * sp.R_pc * dt
             P_load = Il * V
         else:
             Il = P_load / max(V, 20.0) if P_load > 0 else 0.0
-            Vn = max(V + dt * (-Il - V / sp.R_bleed) / sp.C_bus, 0.0); Isrc = 0.0
+            tau = sp.C_bus * sp.R_bleed
+            Vinf = -Il * sp.R_bleed
+            Vn = max(Vinf + (V - Vinf) * math.exp(-dt / tau), 0.0); Isrc = 0.0
             P_load = Il * V
         self.V = max(Vn, 0.0)
         self.I_src = Isrc

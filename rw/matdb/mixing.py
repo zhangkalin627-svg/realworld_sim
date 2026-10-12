@@ -189,6 +189,8 @@ def mix(comp_wt, minor=2.0):
     """comp_wt: {'Fe':70,'Ag':30} 质量百分比（自动归一化）。返回结果字典。"""
     raw = {}
     for k, v in comp_wt.items():          # 符号/中文名先规范化为元素符号再累加
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"含量必须为有限数值：{k}={v!r}（NaN/Inf/非数值一律拒绝，issue 1928）")
         raw[get(k)["sym"]] = raw.get(get(k)["sym"], 0.0) + v
     neg = [e for e, v in raw.items() if v < 0]
     if neg:

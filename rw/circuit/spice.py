@@ -197,15 +197,19 @@ def _env_for(exe):
 
 
 def check_exit(p, what=""):
-    """ngspice 被信号终止（返回码 <0，或 shell 风格 ≥128，如 137=SIGKILL）= 结果残缺，直接报错，不再解析输出（v0.12：issue 1946）。
-    其他非零返回码（不收敛等）只返回描述，由调用方决定；返回 None 表示正常。"""
+    """ngspice 任何非零返回码都拒绝并带 stderr/stdout 尾部报错（v0.30：issue 1955——普通非零退出
+    可能把不完整/带错误的仿真当成功）。信号终止（<0 或 ≥128，如 137=SIGKILL）按异常退出说明。
+    返回 None 表示正常（rc=0）。"""
     rc = p.returncode
     tail = ((p.stderr or "") + (p.stdout or ""))[-300:].strip()
     if rc is not None and (rc < 0 or rc >= 128):
         sig = -rc if rc < 0 else rc - 128
         raise SpiceError("ngspice 异常退出%s（返回码 %d，信号 %d%s，可能内存不足被系统终止）：%s"
                          % ("（%s）" % what if what else "", rc, sig, " SIGKILL" if sig == 9 else "", tail))
-    return None if not rc else "返回码 %d" % rc
+    if rc:
+        raise SpiceError("ngspice 返回码 %d%s，结果不可信、不解析输出：%s"
+                         % (rc, "（%s）" % what if what else "", tail))
+    return None
 
 
 def ngspice_version():
