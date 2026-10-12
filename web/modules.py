@@ -63,7 +63,8 @@ def run_induction(params, progress, checkpoint=None, resume=None):
     kw = dict(geom=g, freq=f("freq", 20) * 1e3, t_heat=f("t_heat", 3.0),
               t_quench=f("t_quench", 3.0), t_air=f("t_air", 6.0),
               medium=params.get("medium", "water_spray"),
-              mur_cold=f("mur_cold", 20.0), nonlinear=bool(params.get("nonlinear", False)))
+              mur_cold=f("mur_cold", 20.0), nonlinear=bool(params.get("nonlinear", False)),
+              accel=params.get("speed", "accurate") == "fast")
     ck = params.get("conc")
     if ck:
         from rw.em.conc import Concentrator
@@ -185,6 +186,8 @@ MODULES = [
          {"name": "t_heat", "label": "加热时间 s", "type": "number", "default": 3, "min": 0.1, "max": 60, "step": 0.1},
          {"name": "mur_cold", "label": "冷态有效磁导率 μr", "type": "number", "default": 20, "min": 1, "max": 200, "step": 1},
          {"name": "nonlinear", "label": "非线性 B-H + 居里点 (更准, 慢约 3 倍)", "type": "check", "default": False},
+         {"name": "speed", "label": "速度档", "type": "select", "default": "accurate",
+          "options": [{"v": "accurate", "t": "精确（默认，验证基线）"}, {"v": "fast", "t": "快速（约 ×1.8，t8/5 偏差 ~0.001s，见 validate_accel.py）"}]},
          {"g": "冷却"},
          {"name": "medium", "label": "淬火介质", "type": "select", "default": "water_spray",
           "options": [{"v": "water_spray", "t": "清水喷淋"}, {"v": "polymer_spray", "t": "聚合物喷淋"}, {"v": "water_dip", "t": "清水浸入"}, {"v": "oil_dip", "t": "油浸"}, {"v": "air", "t": "空冷"}]},

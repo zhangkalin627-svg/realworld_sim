@@ -192,4 +192,18 @@ j3 = run_wait_id(r3.json()["job"], timeout=120)
 assert j3["status"] == "done", j3.get("error", "?")[:150]
 print(f"[web-l] 断点续算 OK ({time.time()-t1:.0f}s): 检查点落盘/中断后续算终态一致(硬化层差<0.02mm)/参数变更加头重跑")
 
+
+# [web-m] 加速档：fast 模式跑通且关键指标与精确档一致
+t1 = time.time()
+cfg = {"mode": "power", "power_kw": 6, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5}
+j = run_wait("induction", {**cfg, "speed": "fast"}, timeout=120)
+assert j["status"] == "done", j.get("error", "?")[:150]
+fast = j["result"]["raw"]
+j = run_wait("induction", cfg, timeout=120)
+acc = j["result"]["raw"]
+assert abs(fast["case_depth_mm"] - acc["case_depth_mm"]) < 0.03, (fast["case_depth_mm"], acc["case_depth_mm"])
+assert abs(fast["HRC_surface"] - acc["HRC_surface"]) < 0.3
+assert abs(fast["t85_surface"] - acc["t85_surface"]) < 0.05
+print(f"[web-m] 加速档 OK ({time.time()-t1:.0f}s): fast vs 精确 硬化层差<0.03mm/HRC差<0.3/t85差<0.05s")
+
 print("web 冒烟测试全部通过")
