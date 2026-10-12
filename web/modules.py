@@ -124,6 +124,21 @@ def _flow_jet(params, progress):
     return run_flow_jet(params, progress)
 
 
+def _mcu(params, progress):
+    from .mcusim import run_mcu
+    return run_mcu(params, progress)
+
+
+def _mcu_default_asm():
+    from rw.mcu import firmware as FW
+    return FW.HEATER_ASM
+
+
+def _mcu_default_plc():
+    from rw.mcu import firmware as FW
+    return FW.PLC_IL
+
+
 def _fluid_options(keys):
     from rw.world.fluids import FLUIDS
     return [{"v": k, "t": FLUIDS[k]["name"]} for k in keys]
@@ -215,4 +230,18 @@ MODULES = [
          {"name": "ang", "label": "孔朝向 仰角 °", "type": "number", "default": 0, "min": -60, "max": 80, "step": 5},
      ],
      "run": _flow_jet},
+    {"key": "mcu", "name": "单片机 + PLC 联合仿真", "desc": "ATmega328P 风格 AVR + FX PLC + 半桥电路：启动握手 → 软启动 → 短路过流保护 → 复位重启，关键时刻全部从波形量出",
+     "fields": [
+         {"name": "fw", "label": "固件", "type": "select", "default": "asm",
+          "options": [{"v": "asm", "t": "汇编固件（默认加热器 PWM 控制）"}, {"v": "behav", "t": "行为级 Python 固件（快，不含指令计时）"}, {"v": "custom", "t": "自定义汇编（填下面）"}]},
+         {"name": "custom_asm", "label": "自定义汇编固件（选了自定义才用）", "type": "textarea", "default": ""},
+         {"name": "custom_plc", "label": "自定义 PLC 指令表（留空用默认加热工位程序）", "type": "textarea", "default": ""},
+         {"g": "演示剧本时刻 (s)"},
+         {"name": "fault_at", "label": "短路时刻 s", "type": "number", "default": 0.45, "min": 0.1, "max": 2.5, "step": 0.05},
+         {"name": "fault_R", "label": "短路电阻 Ω", "type": "number", "default": 0.4, "min": 0.05, "max": 5, "step": 0.05},
+         {"name": "reset_at", "label": "报警复位时刻 s", "type": "number", "default": 0.75, "min": 0.2, "max": 2.8, "step": 0.05},
+         {"name": "restart_at", "label": "再启动时刻 s", "type": "number", "default": 0.85, "min": 0.3, "max": 2.9, "step": 0.05},
+         {"name": "t_end", "label": "仿真时长 s", "type": "number", "default": 1.6, "min": 0.5, "max": 3.0, "step": 0.1},
+     ],
+     "run": _mcu},
 ]

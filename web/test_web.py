@@ -81,4 +81,15 @@ assert j["status"] == "done", j.get("error", "?")
 assert abs(r["v0"] - _m.sqrt(2 * 9.81 * 1.0)) / _m.sqrt(2 * 9.81 * 1.0) < 0.02, "射流初速应对照 Torricelli √(2gH)"
 assert r["t_drain_min"] > 10, "放空时间不合理"
 print(f"[web-g] 流体三算例端到端 OK ({time.time()-t0:.0f}s): 管网/水锤/放空射流全部对照通过")
+t0 = time.time()
+j = run_wait("mcu", {})
+assert j["status"] == "done", j.get("error", "?")
+r = j["result"]; s = r["raw"]
+assert s["t_EN_off"] is not None, "过流保护必须动作（关 EN）"
+assert s["i_peak"] > s["i_th"] > s["i_before"], f"电流关系错: {s}"
+prot = (s["t_EN_off"] - s["t_cross"]) * 1e6
+assert 0 < prot < 500, f"保护响应应 <500 µs: {prot:.0f}"
+assert s["t_Y000_off"] > s["t_PD7_on"], "PLC 应在 MCU 报警后撤销 Y000"
+assert len(r["plots"]) == 3 and all("<svg" in p["svg"] for p in r["plots"]), "时序图缺失"
+print(f"[web-h] 单片机+PLC 联合仿真端到端 OK ({time.time()-t0:.0f}s): {s['instr']} 条指令, 保护响应 {prot:.1f} µs, 峰值 {s['i_peak']:.2f} A")
 print("web 冒烟测试全部通过")
