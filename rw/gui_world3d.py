@@ -164,46 +164,74 @@ class World3DPage(QtWidgets.QWidget):
                          + (self.float_html(fl) if fl else ""))
 
     # ---------------------------------------------------------- 运行
+    # 仿真挪到工作线程（v0.17，测试反馈窗口操作 segfault 排查：本页是唯一在界面线程跑重计算的页，
+    # 仿真期间界面冻结，此时拖拽窗口/双击标题栏会触发 Qt 绘制异常；线程化后界面始终可响应）
+    def _spawn(self, job, on_done):
+        import traceback as _tb
+        class _J(QtCore.QObject):
+            done = QtCore.Signal(object)
+            failed = QtCore.Signal(str)
+            @QtCore.Slot()
+            def run(self):
+                try: self.done.emit(job())
+                except Exception: self.failed.emit(_tb.format_exc())
+        self._th3 = QtCore.QThread(); self._j3 = _J()
+        self._j3.moveToThread(self._th3)
+        self._th3.started.connect(self._j3.run)
+        self._j3.done.connect(on_done); self._j3.failed.connect(self._sim_err)
+        self._j3.done.connect(self._th3.quit); self._j3.failed.connect(self._th3.quit)
+        self._th3.start()
+
+    def _sim_err(self, tb):
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self.btn.setEnabled(True); self.bbreak.setEnabled(True)
+        self.out.setHtml(f'<span style="color:#c62828">仿真出错：<pre>{_h.escape(tb)}</pre></span>')
+
+    def _after_sim(self):
+        n = len(self.res.frames)
+        self.slider.setEnabled(True); self.slider.setMaximum(max(0, n - 1)); self.slider.setValue(n - 1)
+        self.show_report()
+        self.bsel.clear()
+        for b in self.chk["beams"]: self.bsel.addItem(b["name"])
+        self.plot_beam()
+
     def run(self):
         try:
             self.scene = self.read_table()
         except Exception as e:
             self.out.setHtml(f'<span style="color:#c62828">表格有误：{_h.escape(str(e))}</span>'); return
         if not self.scene.parts: return
+        self.view.set_scene(self.scene, keep_cam=True)
+        self.btn.setEnabled(False); self.bbreak.setEnabled(False)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        try:
-            self.view.set_scene(self.scene, keep_cam=True)
-            self.res = simulate(self.scene, tmax=8.0)
-            self.chk = check(self.res)
-        finally:
+        sc = self.scene
+        def job():
+            res = simulate(sc, tmax=8.0)
+            return res, check(res)
+        def done(rc):
             QtWidgets.QApplication.restoreOverrideCursor()
-        n = len(self.res.frames)
-        self.slider.setEnabled(True); self.slider.setMaximum(max(0, n - 1)); self.slider.setValue(n - 1)
-        self.bbreak.setVisible(bool(self.chk.get("broken")))
-        self.show_report()
-        self.bsel.clear()
-        for b in self.chk["beams"]: self.bsel.addItem(b["name"])
-        self.plot_beam()
+            self.btn.setEnabled(True)
+            self.res, self.chk = rc
+            self.bbreak.setEnabled(True); self.bbreak.setVisible(bool(self.chk.get("broken")))
+            self._after_sim()
+        self._spawn(job, done)
 
     def run_break(self):
         """断裂后果：断口分裂 → 再仿真 → 再体检（v0.13）。"""
         from .world3d.fracture import break_and_rerun
         if not self.chk or not self.chk.get("broken"): return
+        self.btn.setEnabled(False); self.bbreak.setEnabled(False)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        try:
-            out = break_and_rerun(self.res, self.chk, tmax=6.0)
-        finally:
+        res, chk = self.res, self.chk
+        def done(out):
             QtWidgets.QApplication.restoreOverrideCursor()
-        if out is None: return
-        self.scene, self.res, self.chk = out
-        self.view.set_scene(self.scene, keep_cam=True)
-        n = len(self.res.frames)
-        self.slider.setEnabled(True); self.slider.setMaximum(max(0, n - 1)); self.slider.setValue(n - 1)
-        self.bbreak.setVisible(False)
-        self.show_report()
-        self.bsel.clear()
-        for b in self.chk["beams"]: self.bsel.addItem(b["name"])
-        self.plot_beam()
+            self.btn.setEnabled(True)
+            if out is None: return
+            self.scene, self.res, self.chk = out
+            self.view.set_scene(self.scene, keep_cam=True)
+            self.bbreak.setVisible(False)
+            self._after_sim()
+        self._spawn(lambda: break_and_rerun(res, chk, tmax=6.0), done)
 
     def float_html(self, fl):
         rows = "".join(f'<li><b>{_h.escape(f["name"])}</b>：密度 {f["rho_part"]:.0f} vs 液体 {f["rho_fluid"]:.0f} kg/m³ → '
