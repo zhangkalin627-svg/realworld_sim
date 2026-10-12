@@ -10,7 +10,12 @@ async function boot() {
     b.onclick = () => select(i);
     nav.appendChild(b);
   });
+  window._mods = MODULES;
+  const meta = await (await fetch('/api/meta')).json();
+  const v = document.querySelector('#ver');
+  if (v) v.textContent = `v${meta.version} · ${meta.modules} 个模块`;
   select(0);
+  loadJobs();
 }
 
 function select(i) {
@@ -70,31 +75,54 @@ $('#runbtn').onclick = async () => {
   poll(r.job);
 };
 
+function renderResult(j) {
+  $('#runbtn').disabled = false;
+  $('#bar').style.display = 'none';
+  if (j.status === 'error' || j.status === 'interrupted') {
+    $('#status').innerHTML = `<span class="err">${j.status === 'interrupted' ? '任务被服务器重启中断（参数已保留，可重新提交）' : '出错了：'}\n${j.error || ''}</span>`;
+    return;
+  }
+  const r = j.result;
+  $('#status').textContent = '完成';
+  $('#lines').textContent = r.lines.join('\n');
+  $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${w}</div>`).join('');
+  $('#plots').innerHTML = (r.plots || []).map(p => p.svg).join('');
+  if (r.viewer) {
+    const vd = document.createElement('div'); vd.id = 'v3d';
+    $('#plots').appendChild(vd);
+    import('/viewer3d.js').then(m => m.show(vd, r.viewer)).catch(e => {
+      vd.innerHTML = '<span class="err">3D 查看器加载失败: ' + e + '</span>';
+    });
+  }
+}
+
 function poll(jid) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
     const j = await (await fetch(`/api/job/${jid}`)).json();
     $('#barfill').style.width = `${(j.progress * 100).toFixed(0)}%`;
     if (j.status === 'running') return poll(jid);
-    $('#runbtn').disabled = false;
-    $('#bar').style.display = 'none';
-    if (j.status === 'error') {
-      $('#status').innerHTML = `<span class="err">出错了：\n${j.error}</span>`;
-      return;
-    }
-    const r = j.result;
-    $('#status').textContent = '完成';
-    $('#lines').textContent = r.lines.join('\n');
-    $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${w}</div>`).join('');
-    $('#plots').innerHTML = (r.plots || []).map(p => p.svg).join('');
-    if (r.viewer) {
-      const vd = document.createElement('div'); vd.id = 'v3d';
-      $('#plots').appendChild(vd);
-      import('/viewer3d.js').then(m => m.show(vd, r.viewer)).catch(e => {
-        vd.innerHTML = '<span class="err">3D 查看器加载失败: ' + e + '</span>';
-      });
-    }
+    renderResult(j); loadJobs();
   }, 700);
+}
+
+async function loadJobs() {
+  const r = await (await fetch('/api/jobs')).json();
+  const host = $('#joblist');
+  if (!host) return;
+  if (!r.jobs.length) { host.innerHTML = '<div class="muted">还没有任务</div>'; return; }
+  const names = {}; (window._mods || []).forEach(m => names[m.key] = m.name);
+  host.innerHTML = r.jobs.map(j => {
+    const t = new Date(j.created * 1000);
+    const icon = {done: '✅', running: '⏳', error: '❌', interrupted: '⛔'}[j.status] || '?';
+    return `<div class="jobrow" data-jid="${j.id}">${icon} ${names[j.module] || j.module} <span class="muted">${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span></div>`;
+  }).join('');
+  host.querySelectorAll('.jobrow').forEach(el => el.onclick = async () => {
+    const j = await (await fetch(`/api/job/${el.dataset.jid}`)).json();
+    if (j.status === 'running') { $('#status').textContent = '该任务还在运行'; return; }
+    $('#lines').innerHTML = ''; $('#warns').innerHTML = ''; $('#plots').innerHTML = '';
+    renderResult(j);
+  });
 }
 
 boot();

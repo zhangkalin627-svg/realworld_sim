@@ -34,3 +34,7 @@ label.ck { justify-content: flex-start; }
 #pform label.ta { display: block; margin: 8px 0; }
 #pform label.ta span { display: block; margin-bottom: 4px; }
 #pform textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; line-height: 1.35; }
+#history { margin-bottom: 10px; }
+#history summary { cursor: pointer; color: #666; }
+.jobrow { padding: 4px 6px; cursor: pointer; border-radius: 4px; }
+.jobrow:hover { background: #eef1f4; }
