@@ -7,3 +7,4 @@ trimesh
 networkx
 rtree
 mujoco>=3.1
+fluids

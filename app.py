@@ -247,6 +247,9 @@ class MainWindow(QtWidgets.QMainWindow):
         from rw.gui_world3d import World3DPage
         self.w3d = World3DPage()
         self.top.addTab(self.w3d, "⑨ 三维装配世界")
+        from rw.gui_flow import FlowPage
+        self.flow = FlowPage()
+        self.top.addTab(self.flow, "⑩ 流体")
         self.setCentralWidget(self.top)
 
 
@@ -285,6 +288,13 @@ def main():
                     poll.start(500)
                 else:
                     QtCore.QTimer.singleShot(1500, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("flow"):
+            # flow0 管网 flow1 水锤 flow2 放空+射流
+            sub = int(which[4:]) if which[4:].isdigit() else 0
+            w.top.setCurrentWidget(w.flow); w.flow.tabs.setCurrentIndex(sub)
+            if sub == 1:
+                pg = w.flow.tabs.widget(1); pg.tc.setValue(15); pg.update_()
+            QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("w3d"):
             # w3d0 钢板桥(仿真后) w3d1 叠积木倒塌(中途帧) w3d2 水里浮沉
             sub = int(which[3:]) if which[3:].isdigit() else 0
