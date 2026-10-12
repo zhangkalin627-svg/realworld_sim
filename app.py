@@ -272,8 +272,14 @@ def main():
     w.show()
     if "--screenshot" in sys.argv:  # 自测：python3 app.py --screenshot out.png [induction|struct|plc]
         i = sys.argv.index("--screenshot")
+        if len(sys.argv) <= i + 1 or sys.argv[i + 1].startswith("-"):
+            print("用法: app.py --screenshot <输出.png> [页名]", file=sys.stderr)
+            sys.exit(2)
         out = sys.argv[i + 1]
         which = sys.argv[i + 2] if len(sys.argv) > i + 2 else "induction"
+        if which == "plc" and getattr(w, "plc", None) is None:  # 公开版没有私有设备页 → 退回单工位演示页
+            print("提示: 本版本没有私有设备页，'plc' 改截 'plcdemo'", file=sys.stderr)
+            which = "plcdemo"
         if which.startswith("em"):
             # em0 B-H/居里点; em1 导磁体对比; em2 三维涡流; em3 ①页 非线性+导磁体完整加热
             sub = int(which[2:]) if which[2:].isdigit() else 0
@@ -313,6 +319,9 @@ def main():
             sub = int(which[3:]) if which[3:].isdigit() else 0
             w.top.setCurrentWidget(w.w3d)
             pg = w.w3d
+            if sub not in (0, 1, 2, 3, 4):  # 子页号越界 → 退回 w3d0
+                print(f"提示: w3d{sub} 不存在，改截 w3d0", file=sys.stderr)
+                sub = 0
             pg.preset.setCurrentIndex({0: 0, 1: 2, 2: 6, 3: 3, 4: 5}[sub]); pg.load_preset(pg.preset.currentIndex())
             if sub != 2:
                 pg.run()
