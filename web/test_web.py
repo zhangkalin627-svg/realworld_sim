@@ -165,7 +165,11 @@ if _sp.find_ngspice():
     assert j["status"] == "done", j.get("error", "?")[:200]
     assert any("Vpp" in l for l in j["result"]["lines"]), j["result"]["lines"]
     assert any(p["title"] == "波形图" for p in j["result"]["plots"])
-    print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 有 ngspice，RC 算例测量+图齐全")
+    # RLC 回归（卡布 v0.26.2 报告：频率响应节点成员判断 AttributeError）
+    j = run_wait("circuit", {"example": "rlc"}, timeout=60)
+    assert j["status"] == "done", j.get("error", "?")[:200]
+    assert any(p["title"] == "频率响应" for p in j["result"]["plots"]), [p["title"] for p in j["result"]["plots"]]
+    print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 有 ngspice，RC 测量+图齐全，RLC 频率响应回归通过")
 else:
     assert j["status"] == "error" and "ngspice" in j["error"] and "Traceback" not in j["error"], j.get("error", "?")[:200]
     print(f"[web-k] 电路模块 OK ({time.time()-t1:.0f}s): 无 ngspice → 友好报错（完整算例需有 ngspice 的服务器验证）")
