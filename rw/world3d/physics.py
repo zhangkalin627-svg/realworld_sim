@@ -126,9 +126,9 @@ def simulate(scene, tmax=6.0, fps=30, settle_v=2e-3, dt=0.002, floor_mu=0.7):
     for k, lst in F.items():
         pts = {}
         for pos, fw in lst:
-            key = tuple(np.round(pos, 4))
+            key = tuple(np.round(pos, 3))
             a = pts.setdefault(key, [pos, np.zeros(3), 0]); a[1] += fw; a[2] += 1
-        contacts[k] = [(v[0] * 1000, v[1] / v[2]) for v in pts.values()]   # 位置 mm, 力 N (geom1→geom2)
+        contacts[k] = [(v[0] * 1000, v[1] / nav) for v in pts.values()]   # 对 nav 步时间平均（不是对出现次数平均）   # 位置 mm, 力 N (geom1→geom2)
     res.contacts = contacts
     res.frames = np.array(frames); res.times = np.array(times)
     res.bodies = bodies

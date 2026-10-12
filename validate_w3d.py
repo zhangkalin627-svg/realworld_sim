@@ -31,7 +31,7 @@ def run():
           f"挠度 {b['defl']:.4f} vs {d_th:.4f} mm ({100*(b['defl']/d_th-1):+.2f}%)")
     assert abs(b["Mmax"] / M_th - 1) < 0.01 and abs(b["defl"] / d_th - 1) < 0.02
     rs = sorted(x["F"] for x in c["bearing"] if "钢板" in x["pair"] and "墩" in x["pair"])
-    assert abs(rs[0] - R_) / R_ < 0.01
+    assert abs(rs[0] - R_) / R_ < 0.01 and abs(rs[1] - R_) / R_ < 0.01   # 两个墩的支反力都 = (自重+重物)/2
     # c) 质量守恒：地面支反力 = 总重
     s = Scene(); s.add("a", "box", [500, 500, 100], "Q235", pos=[0, 0, 50]); s.add("b", "cyl", [200, 300], "Cu", pos=[0, 0, 250])
     r = simulate(s, tmax=2); c = check(r)
