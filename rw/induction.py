@@ -186,6 +186,8 @@ class InductionQuenchSim:
         self.conc_loss_W = 0.0
         # v0.27.2 默认放宽到 0.048（4x）：缪斯 6 工况包线验证（5k-100kHz × 3-9kW）精度零代价、省时 15-39%
         self.em_tol = 0.048
+        # v0.28 符号组装热步：None=未构建, False=不可用(回退通用 asm), dict=就绪
+        self._sym = None
         if nonlinear or conc is not None:
             self.em_every = max(em_every, 0.1)   # 温度变化慢，非线性迭代贵
         if accel:
@@ -388,7 +390,72 @@ class InductionQuenchSim:
         return 0.5 * I**2 * R  # I 为峰值, P = I_rms^2 R
 
     # -------------------------------------------------------------- 传热一步
+    def _build_sym(self):
+        """构建符号组装模板并在随机非均匀场上逐核与 skfem asm 对比（rel<1e-12）。
+        任何不一致返回 False（回退通用 asm），保证 skfem 版本漂移不会静默出错。"""
+        import os
+        if os.environ.get("RW_NO_SYM"):
+            return False
+        try:
+            from . import symasm as _symasm
+            from . import materials as _M
+            tb = self.tb
+            S = _symasm.SymThermalS(self)
+            Tq0 = S.interp_vol(np.full(tb.N, self.T0))
+            tm = {
+                "K": _symasm.SymAssembler(_k_th, tb, dict(k=_M.steel_k(Tq0))),
+                "C": _symasm.SymAssembler(_c_th, tb, dict(rc=_M.STEEL_45["density"] * _M.steel_cp(Tq0))),
+                "Ho": _symasm.SymAssembler(_h_bil, self.fb_outer, dict(h=_M.quench_h("air", np.full(self.fb_outer.N, self.T0)))),
+                "Hi": _symasm.SymAssembler(_h_bil, self.fb_inner, dict(h=_M.quench_h("air", np.full(self.fb_inner.N, self.T0)))),
+            }
+            rng = np.random.RandomState(0)
+            Tt = rng.rand(tb.N) * 900 + 25
+            Tq = S.interp_vol(Tt)
+            def rel(a, b):
+                return float(np.abs(a - b).max() / max(np.abs(b).max(), 1e-300))
+            k = _M.steel_k(Tq); rc = _M.STEEL_45["density"] * _M.steel_cp(Tq)
+            checks = [
+                rel(S.kernel_K(k, tm["K"]).data, asm(_k_th, tb, k=k).data),
+                rel(S.kernel_C(rc, tm["C"]).data, asm(_c_th, tb, rc=rc).data),
+            ]
+            qe = rng.rand(tb.nelems) * 1e9
+            checks.append(rel(S.kernel_Q(qe), asm(_q_th, tb, q=self.tb0.interpolate(qe))))
+            for key, fb, tmk in (("o", self.fb_outer, "Ho"), ("i", self.fb_inner, "Hi")):
+                h = _M.quench_h("water_spray", S.interp_fb(key, Tt))
+                checks.append(rel(S.kernel_H(key, h, tm[tmk]).data, asm(_h_bil, fb, h=h).data))
+                checks.append(rel(S.kernel_hlin(key, h, 30.0), asm(_h_lin, fb, h=h, Tinf=30.0)))
+            if max(checks) >= 1e-12:
+                return False
+            return {"S": S, "tm": tm}
+        except Exception:
+            return False
+
     def _thermal_step(self, T, q, phase, dt=None):
+        if self._sym is None:
+            self._sym = self._build_sym()
+        if self._sym:
+            S, tm = self._sym["S"], self._sym["tm"]
+            Tq = S.interp_vol(T)
+            k = M.steel_k(Tq)
+            rc = M.STEEL_45["density"] * M.steel_cp(Tq)
+            K = S.kernel_K(k, tm["K"])
+            C = S.kernel_C(rc, tm["C"])
+            Q = S.kernel_Q(q) if q is not None else 0.0
+            dt = dt or self.dt
+            A = C / dt + K
+            b = C @ T / dt + Q
+            for key, frac in (("o", 1.0), ("i", self.inner_quench)):
+                Ts = S.interp_fb(key, T)
+                h_air = M.quench_h("air", Ts)
+                if phase == "quench":
+                    hq = M.quench_h(self.medium, Ts)
+                    h = frac * hq + (1 - frac) * h_air
+                    Tinf = M.QUENCHANTS[self.medium]["T_bath"] * frac + 25.0 * (1 - frac)
+                else:
+                    h, Tinf = h_air, 25.0
+                A = A + S.kernel_H(key, h, tm["H" + key])
+                b = b + S.kernel_hlin(key, h, Tinf)
+            return spla.spsolve(A.tocsc(), b)
         tb = self.tb
         Tq = tb.interpolate(T)
         k = M.steel_k(Tq.value)
