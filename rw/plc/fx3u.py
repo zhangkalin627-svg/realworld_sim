@@ -40,12 +40,14 @@ class FX3U:
         self._tkeep = {}
         self.first = True
         self.prog = []
-        for ln in il_lines:
+        self.prog_lines = []   # 每条指令在原程序里的行号（1 起），报错定位用
+        for n, ln in enumerate(il_lines, 1):
             ln = ln.split(';')[0].strip()
             if not ln:
                 continue
             parts = ln.split()
             self.prog.append((parts[0].upper(), parts[1:]))
+            self.prog_lines.append(n)
         if self.prog[-1][0] != 'END':
             raise ValueError('program must end with END')
         self.edge = [False] * len(self.prog)
@@ -164,7 +166,7 @@ class FX3U:
                 prev_out = True
                 continue
             else:
-                raise NotImplementedError(op)
+                raise NotImplementedError(f"第{self.prog_lines[i]}行：未知指令 {op}")
             prev_out = False
         for d in stl_outs:
             self.bits[d] = d in stl_true
@@ -270,7 +272,7 @@ class FX3U:
                 for k in range(n1):
                     self.setbit(dev_offset(dst, k), new[k])
         else:
-            raise NotImplementedError(op)
+            raise NotImplementedError(f"第{self.prog_lines[i]}行：未知指令 {op}")
 
     # ------------- convenience
     def dword(self, d):
