@@ -171,8 +171,11 @@ _mcu_st.run()
 
 # 10) v0.8 整机联动：上电 → PLC → 变频器 → 主回路 → 机械 → 加热 → 喷淋（理论/ngspice 对比 + 能量守恒 + 故障传播）
 print("\n=== 10) 整机联动 ===")
-from rw.machine import selftest as _mach_st
-_mach_st.run()
+if not find_ngspice():
+    print("整机联动：没找到 ngspice，跳过（Ubuntu: sudo apt install ngspice）")
+else:
+    from rw.machine import selftest as _mach_st
+    _mach_st.run()
 
 
 # 11) v0.9 电磁升级（非线性B-H/导磁体/三维涡流，见 validate_em.py）
