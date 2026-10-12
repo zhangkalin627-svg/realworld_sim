@@ -149,6 +149,10 @@ else:
         ms["频率"], ms["Vmin"], ms["Vmax"], mi["Vmax"], mi["Vrms"]))
 
 
+# 8g) v0.11.1 电路导入回归（.options、.net 类型判断/多脚器件、热模型烧毁截止与拼接、无激励警告、波形名大小写；见 validate_circuit.py）
+import validate_circuit; validate_circuit.run()
+
+
 # 9) v0.7 单片机仿真接 PLC：指令计时、定时器、PWM、ADC、UART、PLC↔MCU 握手、过流保护（理论 vs 仿真）
 print("\n=== 9) 单片机（AVR 子集）+ FX PLC + 电路 联合仿真 ===")
 from rw.mcu import selftest as _mcu_st

@@ -253,11 +253,40 @@ def read_raw(path):
     return info.get("Plotname", ""), out, dict(zip(names, types))
 
 
+class CIDict(dict):
+    """v0.11.1：信号名大小写不敏感的字典。存储键统一小写，self.orig 记住原始写法（显示用）。"""
+
+    def __init__(self, src=None):
+        super().__init__(); self.orig = {}
+        for k, v in (src or {}).items():
+            self[k] = v
+
+    @staticmethod
+    def _k(k): return k.lower() if isinstance(k, str) else k
+    def __setitem__(self, k, v):
+        lk = self._k(k); self.orig.setdefault(lk, k); super().__setitem__(lk, v)
+    def __getitem__(self, k): return super().__getitem__(self._k(k))
+    def __contains__(self, k): return super().__contains__(self._k(k))
+    def __delitem__(self, k): super().__delitem__(self._k(k)); self.orig.pop(self._k(k), None)
+    def get(self, k, d=None): return super().get(self._k(k), d)
+    def pop(self, k, *d): self.orig.pop(self._k(k), None); return super().pop(self._k(k), *d)
+    def setdefault(self, k, d=None):
+        if k not in self: self[k] = d
+        return self[k]
+    def update(self, *a, **kw):
+        for k, v in dict(*a, **kw).items(): self[k] = v
+    def display(self, k): return self.orig.get(self._k(k), k)
+
+
 class Waveforms:
-    """仿真结果。w['out'] 取节点电压，w['a-b'] 两节点差，w['i(V1)'] 取电压源电流，w.x 扫描变量（时间/频率/直流）。"""
+    """仿真结果。w['out'] 取节点电压，w['a-b'] 两节点差，w['i(V1)'] 取电压源电流，w.x 扫描变量（时间/频率/直流）。
+    信号名存储和查找都大小写不敏感（v0.11.1），原始名保留在 w.data.orig 里用于显示。"""
 
     def __init__(self, plotname, data, types, netlist="", log=""):
+        data = data if isinstance(data, CIDict) else CIDict(data)
+        types = types if isinstance(types, CIDict) else CIDict(types or {})
         self.plotname, self.data, self.types, self.netlist, self.log = plotname, data, types, netlist, log
+        self.warnings = []
         self.xname = next(iter(data))
         self.x = np.real(data[self.xname])
 
@@ -273,9 +302,10 @@ class Waveforms:
         """可选的信号名（节点电压 + 支路电流），给示波器下拉框用。"""
         out = []
         for n in self.names():
-            if n.endswith("#branch"):
+            n = self.data.display(n)
+            if n.lower().endswith("#branch"):
                 out.append(f"i({n[:-7]})")
-            elif n.startswith("v(") and n.endswith(")"):
+            elif n.lower().startswith("v(") and n.endswith(")"):
                 out.append(n[2:-1])
             elif self.types.get(n) in ("voltage",) or "#" not in n:
                 out.append(n)
@@ -344,6 +374,37 @@ class Circuit(_Builder):
             if u not in self.models and u in MODELS:
                 self.models[u] = MODELS[u]
 
+    def excitation(self):
+        """v0.11.1：网表里有没有激励。返回 (有/没有/None=不确定, 说明)。
+        独立源 V/I（值不全是 DC 0）、行为源 B、带 IC= 的储能元件、.ic 都算激励；有 .include 时看不到里面，返回 None。"""
+        found, zero_src = [], []
+        lines = [e.line() for e in self.elements]
+        for sc in self.subckts.values():
+            lines += [l for l in str(sc).splitlines()[1:] if l.strip() and not l.strip().startswith(".")]
+        for l in lines:
+            f = l.split()
+            if not f:
+                continue
+            k = f[0][0].upper()
+            if k in "VI":
+                spec = " ".join(f[3:]).lower()
+                nums = [parse_value(x) for x in re.findall(r"[-+]?[\d.]+(?:e[-+]?\d+)?[a-zµ]*", spec)]
+                if re.search(r"\b(pulse|sin|pwl|exp|sffm|am|ac)\b", spec) or any(x for x in nums if x):
+                    found.append(f[0])
+                else:
+                    zero_src.append(f[0])
+            elif k == "B":
+                found.append(f[0])
+            elif k in "CL" and re.search(r"(?i)\bic=", l):
+                found.append(f[0] + "(IC)")
+        if any(x.lower().startswith(".ic") for x in self.extra):
+            found.append(".ic")
+        if found:
+            return True, "激励：" + ", ".join(found[:8])
+        if self.includes:
+            return None, "网表本身没有独立源（.include 文件里可能有）"
+        return False, "网表里没有任何独立源/激励" + ("（只有 0 V 电流表 %s）" % ", ".join(zero_src[:5]) if zero_src else "")
+
     def netlist(self, analysis, outfile=None, save=None):
         self._auto_models()
         L = [self.title]
@@ -377,7 +438,15 @@ class Circuit(_Builder):
                 err = [l for l in log.splitlines() if "rror" in l or "fatal" in l.lower()]
                 raise SpiceError("ngspice 没算出结果：\n" + "\n".join(err[:15] or log.splitlines()[-15:]) + "\n\n--- netlist ---\n" + net)
             name, data, types = read_raw(raw)
-        return Waveforms(name, data, types, net, log)
+        w = Waveforms(name, data, types, net, log)
+        ok, why = self.excitation()
+        if ok is False:
+            w.warnings.append("无激励源，结果全零（%s）" % why)
+        else:
+            mx = max((float(np.max(np.abs(v))) for k, v in w.data.items() if k != w.xname and len(v)), default=0.0)
+            if mx < 1e-20:
+                w.warnings.append("所有信号都≈0（最大 %.1e），检查激励源是否接上" % mx)
+        return w
 
     # 常用分析
     def tran(self, step, stop, start=0.0, tmax=None, uic=False, **kw):
