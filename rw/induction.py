@@ -159,7 +159,7 @@ def _h_lin(v, w):
 class InductionQuenchSim:
     def __init__(self, geom=None, freq=30e3, power_kw=9.0, t_heat=3.0, t_delay=0.0,
                  medium="water_spray", t_quench=3.0, t_air=6.0, inner_quench=0.0,
-                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False,
+                 mur_cold=20.0, T0=25.0, dt=0.01, em_every=0.05, verbose=False, accel=False,
                  nonlinear=False, bh=None, conc=None):
         self.g = geom or BottleNeckGeometry()
         self.f = freq
@@ -170,6 +170,8 @@ class InductionQuenchSim:
         self.mur_cold = mur_cold
         self.T0 = T0
         self.dt = dt
+        # v0.26 加速模式：隐式格式无条件稳定，慢阶段放大步长。倍数 (heat, delay, quench, air)
+        self.dt_mult = {"heat": 1, "delay": 2, "quench": 1, "air": 10} if accel else {"heat": 1, "delay": 1, "quench": 1, "air": 1}
         self.em_every = em_every
         self.verbose = verbose
         self.nonlinear = nonlinear          # True: 45 钢用非线性 B-H(含居里点)，False: 旧的线性有效 μr(T)
@@ -181,6 +183,8 @@ class InductionQuenchSim:
         self.em_tol = 0.012
         if nonlinear or conc is not None:
             self.em_every = max(em_every, 0.1)   # 温度变化慢，非线性迭代贵
+        if accel:
+            self.em_every = max(self.em_every * 2, 0.1)   # v0.26 加速：EM 求解降频，温度场惯量大，0.1s 间隔足够
         h_skin = min(0.04, 0.25 * self.skin_depth_mm(25.0))
         self._setup(h_skin)
 
@@ -379,7 +383,7 @@ class InductionQuenchSim:
         return 0.5 * I**2 * R  # I 为峰值, P = I_rms^2 R
 
     # -------------------------------------------------------------- 传热一步
-    def _thermal_step(self, T, q, phase):
+    def _thermal_step(self, T, q, phase, dt=None):
         tb = self.tb
         Tq = tb.interpolate(T)
         k = M.steel_k(Tq.value)
@@ -387,8 +391,9 @@ class InductionQuenchSim:
         K = asm(_k_th, tb, k=k)
         C = asm(_c_th, tb, rc=rc)
         Q = asm(_q_th, tb, q=self.tb0.interpolate(q)) if q is not None else 0.0
-        A = C / self.dt + K
-        b = C @ T / self.dt + Q
+        dt = dt or self.dt
+        A = C / dt + K
+        b = C @ T / dt + Q
         for fb, frac in ((self.fb_outer, 1.0), (self.fb_inner, self.inner_quench)):
             Ts = fb.interpolate(T).value
             h_air = M.quench_h("air", Ts)
@@ -442,7 +447,7 @@ class InductionQuenchSim:
         self.A_end_heat = None
         self.I_end = None
         self.I_hist = []
-        steps = int(round(t_end / self.dt))
+        steps = int(round(t_end / self.dt))   # 进度/检查点节拍用的估计步数（加速模式实际更少）
         s0 = 0
         if resume:  # 断点续算：从 checkpoint 恢复全部携带状态（_thermal_step 本身无状态）
             T = np.asarray(resume["T"], float)
@@ -462,15 +467,16 @@ class InductionQuenchSim:
             self.I_end = resume.get("I_end")
             ms = resume.get("mur_state")
             self._mur_state = np.asarray(ms, float) if ms is not None else None
-            s0 = int(round(t / self.dt))
-        for s in range(s0, steps):
+        s = 0
+        while t < t_end - 1e-12:
             if t < self.t_heat - 1e-9:
                 phase = "heat"
                 if t - t_lastem >= self.em_every - 1e-9:
                     q, I = self.solve_em(T)
                     t_lastem = t
                     self.I_hist.append(I)
-                Tn = self._thermal_step(T, q, phase)
+                dts = min(self.dt * self.dt_mult["heat"], self.t_heat - t)  # 不越过加热结束边界
+                Tn = self._thermal_step(T, q, phase, dts)
             else:
                 if self.T_end_heat is None:
                     self.T_end_heat = T.copy()
@@ -483,8 +489,9 @@ class InductionQuenchSim:
                     phase = "quench"
                 else:
                     phase = "air"
-                Tn = self._thermal_step(T, None, phase)
-            tn = t + self.dt
+                dts = min(self.dt * self.dt_mult[phase], t_end - t)
+                Tn = self._thermal_step(T, None, phase, dts)
+            tn = t + dts
             # 记录 800/500 下穿时间（只在峰值之后、下降段）
             Tpeak = np.maximum(Tpeak, Tn)
             cooling = Tn < T
@@ -492,16 +499,17 @@ class InductionQuenchSim:
                 cross = cooling & (T >= thr) & (Tn < thr) & np.isnan(arr)
                 if np.any(cross):
                     fr = (T[cross] - thr) / (T[cross] - Tn[cross])
-                    arr[cross] = t + fr * self.dt
+                    arr[cross] = t + fr * dts
             T, t = Tn, tn
             hist["t"].append(t)
             hist["Tsurf"].append(T[i_out])
             hist["Tcore"].append(T[i_mid])
             hist["Tin"].append(T[i_in])
             if progress and s % 20 == 0:
-                progress(s / steps)
+                progress(min(t / t_end, 1.0))
             if checkpoint and checkpoint_every and s % checkpoint_every == 0:
                 checkpoint(self._snapshot(T, Tpeak, t800, t500, hist, t, I))
+            s += 1
         if self.T_end_heat is None:
             self.T_end_heat = T.copy()
             self.A_end_heat = self._last_A
