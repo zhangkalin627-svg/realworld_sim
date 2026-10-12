@@ -2,6 +2,9 @@
 首页可达、模块清单、材料库即查、感应淬火小算例端到端跑通（缩短加热/淬火时间，约 10–30 s）。"""
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ["RW_JOBS_DB"] = os.path.join("/tmp", f"rw_test_jobs_{os.getpid()}.db")   # v0.22 测试库隔离
+if os.path.exists(os.environ["RW_JOBS_DB"]):
+    os.remove(os.environ["RW_JOBS_DB"])
 from fastapi.testclient import TestClient
 from web.server import app
 
@@ -92,4 +95,23 @@ assert 0 < prot < 500, f"保护响应应 <500 µs: {prot:.0f}"
 assert s["t_Y000_off"] > s["t_PD7_on"], "PLC 应在 MCU 报警后撤销 Y000"
 assert len(r["plots"]) == 3 and all("<svg" in p["svg"] for p in r["plots"]), "时序图缺失"
 print(f"[web-h] 单片机+PLC 联合仿真端到端 OK ({time.time()-t0:.0f}s): {s['instr']} 条指令, 保护响应 {prot:.1f} µs, 峰值 {s['i_peak']:.2f} A")
+t0 = time.time()
+from web.jobstore import JobStore
+dbp = os.environ["RW_JOBS_DB"]
+j = run_wait("materials", {})
+assert j["status"] == "done"
+lst = c.get("/api/jobs").json()
+assert any(x["module"] == "materials" and x["status"] == "done" for x in lst["jobs"]), "历史面板缺已完成任务"
+mt = c.get("/api/meta").json()
+assert mt["version"] and mt["modules"] >= 8, f"meta 异常: {mt}"
+print("[web-i2] /api/meta 版本与模块数 OK")
+st2 = JobStore(dbp)                      # 模拟服务器重启：新实例读同一库
+assert st2.get(list(lst["jobs"])[0]["id"]) is not None, "重启后任务历史丢失"
+st2.create("fake1", "plc", {"t_sim": 5}) # 伪造一个"正在跑"的任务
+st3 = JobStore(dbp)
+n = st3.mark_interrupted()               # 重启时的清理动作
+assert n == 1 and st3.get("fake1")["status"] == "interrupted", "running 任务应被标记 interrupted"
+assert st3.get(list(lst["jobs"])[0]["id"])["status"] == "done", "已完成任务不应被误标"
+assert "参数已保留" in st3.get("fake1")["error"]
+print(f"[web-i] 任务持久化 OK ({time.time()-t0:.0f}s): SQLite 落盘, 重启历史保留, running→interrupted 清理正确")
 print("web 冒烟测试全部通过")
