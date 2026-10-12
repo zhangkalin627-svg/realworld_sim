@@ -327,14 +327,18 @@ def main():
                 w.mat.pt.prop.setCurrentIndex(1); w.mat.pt.show_el("Ag")
             QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("circ"):
-            w.top.setCurrentWidget(w.circ)
+            if getattr(w, "circ_tabs", None) is not None:  # 私有板子页存在时 ⑥ 是子页签
+                w.top.setCurrentWidget(w.circ_tabs); w.circ_tabs.setCurrentWidget(w.circ)
+            else:
+                w.top.setCurrentWidget(w.circ)
             pg = w.circ
             sub = int(which[4:]) if which[4:].isdigit() else 0
             # circ0 半桥四通道+时间光标；circ1 运放振荡器+FFT+电压光标；circ2 导入 KiCad 网表+Auto Set；circ3 整流（差分通道）
             key = {0: "halfbridge", 1: "astable", 3: "rect"}.get(sub)
             for i in range(pg.pick.count()):
                 d = pg.pick.itemData(i)
-                if (key and d == ("ex", key)) or (sub == 2 and d[0] == "file" and d[1].endswith("npn_switch_kicad.net")):
+                if (key and d == ("ex", key)) or (sub == 2 and d[0] == "file" and d[1].endswith("npn_switch_kicad.net")) \
+                        or (sub == 4 and d[0] == "file" and d[1].endswith("no_source_demo.cir")):  # circ4：v0.11.1 无激励警告
                     pg.pick.setCurrentIndex(i); break
             pg.simulate()
             poll = QtCore.QTimer(w)

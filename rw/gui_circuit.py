@@ -302,6 +302,7 @@ class CircuitPage(QtWidgets.QWidget):
             self.status.setText(f"得到 {w.plotname}（{len(w.x)} 点）。示波器只显示瞬态（.tran）结果。"); return
         self.scope.load(w)
         nets = w.nets()
+        warn = getattr(w, "warnings", [])  # v0.11.1：无激励/全零时不报“完成”
         self._block = True
         for r in self.rows:
             cur = r.src.currentText(); r.src.clear(); r.src.addItems([""] + nets); r.src.setEditText(cur)
@@ -312,10 +313,15 @@ class CircuitPage(QtWidgets.QWidget):
             for i, r in enumerate(self.rows):
                 r.on.setChecked(i < len(vs)); r.src.setEditText(vs[i] if i < len(vs) else "")
             self._block = False; self.from_ui(); self.autoset()
-            self.status.setText(f"完成：{len(w.x)} 个时间点，记录 {eng(w.x[-1] - w.x[0], 's')}（已 Auto Set）"); return
+            self.status.setText(self._done_text(w, warn, "（已 Auto Set）")); return
         self._block = False
-        self.status.setText(f"完成：{len(w.x)} 个时间点，记录 {eng(w.x[-1] - w.x[0], 's')}")
+        self.status.setText(self._done_text(w, warn))
         self.from_ui()
+
+    def _done_text(self, w, warn, tail=""):
+        if warn:
+            return "<span style='color:#b26a00;font-weight:bold'>⚠ 警告：" + "；".join(warn) + f"</span>（{len(w.x)} 个时间点）"
+        return f"完成：{len(w.x)} 个时间点，记录 {eng(w.x[-1] - w.x[0], 's')}{tail}"
 
     def apply_preset(self, p):
         for i, r in enumerate(self.rows):

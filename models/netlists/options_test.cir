@@ -1,0 +1,15 @@
+* v0.11.1 regression: .options must reach ngspice (rshunt adds R to ground at every node)
+V1 1 0 DC 1
+R1 1 2 1meg
+R2 2 0 1meg
+D1 2 3 DTEST
+R3 3 0 1meg
+.model DTEST D(Is=1e-14 N=1)
+.options rshunt=1meg reltol=1e-4 gmin=1e-9
+.option abstol=1e-13
+.op
+.control
+run
+print v(2) v(3)
+.endc
+.end
