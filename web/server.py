@@ -22,6 +22,38 @@ class RunReq(BaseModel):
     params: dict = {}
 
 
+def _validate_params(mod, params):
+    """按模块表单 schema 校验/收口 API 参数：数字解析+按 min/max 收口；select 必须在选项内；
+    textarea 必须是字符串；check 归一成 bool。未声明的参数原样透传（runner 自己处理）。"""
+    out = dict(params)
+    for fd in mod["fields"]:
+        if "name" not in fd:
+            continue
+        name, typ, lab = fd["name"], fd.get("type", "number"), fd.get("label", fd["name"])
+        if name not in out:
+            continue
+        v = out[name]
+        if typ == "number":
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"参数「{lab}」需要数字，收到 {v!r}")
+            if fd.get("min") is not None:
+                v = max(float(fd["min"]), v)
+            if fd.get("max") is not None:
+                v = min(float(fd["max"]), v)
+            out[name] = v
+        elif typ == "select":
+            opts = [o["v"] if isinstance(o, dict) else o for o in fd.get("options", [])]
+            if opts and not any(str(v) == str(o) for o in opts):
+                raise HTTPException(400, f"参数「{lab}」的取值 {v!r} 不在可选范围内")
+        elif typ == "check":
+            out[name] = bool(v)
+        elif typ == "textarea" and not isinstance(v, str):
+            raise HTTPException(400, f"参数「{lab}」需要文本")
+    return out
+
+
 @app.get("/api/modules")
 def list_modules():
     return [{k: m[k] for k in ("key", "name", "desc", "fields")} for m in MODULES]
@@ -32,8 +64,9 @@ def start_sim(key: str, req: RunReq):
     mod = next((m for m in MODULES if m["key"] == key), None)
     if mod is None:
         raise HTTPException(404, "未知模块")
+    params = _validate_params(mod, req.params)
     jid = uuid.uuid4().hex[:12]
-    STORE.create(jid, key, req.params)
+    STORE.create(jid, key, params)
     last = [0.0, -1.0]                                # (上次写入的进度, 上次写入时间)：进度落盘节流
 
     def on_progress(f):
@@ -43,10 +76,11 @@ def start_sim(key: str, req: RunReq):
 
     def job():
         try:
-            res = mod["run"](req.params, on_progress)
+            res = mod["run"](params, on_progress)
             STORE.set_done(jid, res)
-        except Exception:
-            STORE.set_error(jid, traceback.format_exc(limit=6))
+        except Exception as e:
+            traceback.print_exc()                       # 完整堆栈只留在服务器日志，不回给客户端
+            STORE.set_error(jid, f"{type(e).__name__}: {e}")
 
     _pool.submit(job)
     return {"job": jid}
