@@ -62,3 +62,20 @@ print("10 m 清水(4°C) 表压 %.2f kPa（理论 98.07）；沸点@1atm %.2f°C
 print("层流 Re=1000 摩擦系数 %.4f（理论 0.064）" % friction_factor(1000, 0))
 m = InductionMotor(); import math
 print("电机额定点转矩 %.3f N·m（P/ω=%.3f）" % (m.torque(2*math.pi*m.n_rated/60), m.Tn))
+# 7) 材料库：元素数据对照手册值（CRC Handbook），混合法则对照牌号实测，互溶判断对照二元相图
+from rw.matdb.elements import ELEMENTS, get
+from rw.matdb.mixing import mix, check_against_grades, binary
+from rw.matdb.alloys import GRADES
+print("元素数 %d（应为 118）；Fe 密度 %.0f kg/m³（CRC 7874）；Al 熔点 %.2f°C（660.32）；W 熔点 %.0f°C（3422）；"
+      "Cu 电阻率 %.3f μΩ·cm（1.678）；Fe 弹性模量 %.0f GPa（211）" % (
+      len(ELEMENTS), get('Fe')['density'], get('Al')['melt_C'], get('W')['melt_C'], get('Cu')['resist'] * 1e8, get('Fe')['E']))
+print("铁+银：%s；铜+镍：%s" % (binary('Fe', 'Ag')[0], binary('Cu', 'Ni')[0]), "（应为 liq_gap / ss）")
+rows, agree = check_against_grades()
+errs = [abs(r[3]) for r in rows]
+worst = max(rows, key=lambda r: abs(r[3]))
+print("混合法则密度 vs %d 个牌号实测：平均偏差 %.1f%%，最大 %s %+.1f%%" % (len(rows), sum(errs) / len(errs), worst[0], worst[3]))
+print("模型(Miedema+Hume-Rothery) vs 二元相图结论：%d/%d 一致 (%.0f%%)" % (sum(a[4] for a in agree), len(agree), 100 * sum(a[4] for a in agree) / len(agree)))
+inr = []
+for k in ("Constantan", "H62", "H68", "Monel400", "Cr20Ni80", "QSn6.5-0.1", "Invar36", "304"):
+    r = mix(GRADES[k]["comp"]); lo, hi = r["resist_range"]; inr.append(lo <= GRADES[k]["resist"] <= hi)
+print("固溶体电阻率：实测落在估算范围内 %d/%d 个牌号" % (sum(inr), len(inr)))
