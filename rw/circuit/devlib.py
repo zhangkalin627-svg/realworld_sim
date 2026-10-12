@@ -397,7 +397,7 @@ def add_grid(c, lines=("L1", "L2", "L3"), neutral=None, vll=380.0, f=50.0, prese
             vp = SURGE_LEVELS.get(surge, surge)
             t0 = surge_t0 if surge_t0 is not None else 2.0 / f + 0.25 / f
             pts = surge_pwl(vp, t0)
-            c.raw(f"Vsurge {src} grid_{ln}_g PWL(" + " ".join("%.6g %.6g" % p for p in pts) + ")")
+            c.raw(f"Vsurge grid_{ln}_g {src} PWL(" + " ".join("%.6g %.6g" % p for p in pts) + ")")
             c.R("surge", f"grid_{ln}_g", f"grid_{ln}_z", surge_z)
             nxt = f"grid_{ln}_z"
         c.L(f"grid_{ln}", nxt, f"grid_{ln}_r", zs[0])

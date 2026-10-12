@@ -41,6 +41,57 @@ def part_com_local(part):
     return (V[:, None] * O).sum(axis=0) / V.sum()
 
 
+def _prim_inertia_diag(pk, d, m):
+    """图元关于自身质心、图元局部坐标（圆柱轴=局部 z）的惯量对角，SI 单位（kg·m²）。
+    issue 1929：tube 必须用圆环公式——MuJoCo 只能按实心圆柱几何推惯量，与环形质量不符。"""
+    if pk == "box":
+        a, b, c = d[0] / 1000, d[1] / 1000, d[2] / 1000
+        return np.array([m * (b * b + c * c), m * (a * a + c * c), m * (a * a + b * b)]) / 12
+    if pk == "cyl":
+        r, L = d[0] / 2000, d[1] / 1000
+        return np.array([m * (3 * r * r + L * L) / 12, m * (3 * r * r + L * L) / 12, m * r * r / 2])
+    if pk == "tube":
+        ro, ri, L = d[0] / 2000, d[1] / 2000, d[2] / 1000
+        return np.array([m * (3 * (ro * ro + ri * ri) + L * L) / 12,
+                         m * (3 * (ro * ro + ri * ri) + L * L) / 12,
+                         m * (ro * ro + ri * ri) / 2])
+    r = d[0] / 2000
+    return np.array([2 * m * r * r / 5.0] * 3)
+
+
+def _body_inertial_xml(scene, idx, anchor):
+    """body 内含 tube 图元时，全 body 改用解析惯量生成显式 <inertial>（box/cyl/sphere 公式
+    与 MuJoCo 几何推导一致，tube 用圆环公式），覆盖 geom 几何推导（issue 1929）。
+    无 tube 的 body 保持原有 MuJoCo 几何推导路径，行为不变。"""
+    entries = []
+    has_tube = False
+    for i in idx:
+        p = scene.parts[i]
+        rel = np.array(p.pos) / 1000 - anchor
+        for pk, pd, po in p.primitives():
+            m = _prim_volume(pk, pd) * 1e-9 * p.material["rho"]
+            pos = rel + p.R.apply(np.array(po, float) / 1000)
+            entries.append((m, pos, p.R.as_matrix(), _prim_inertia_diag(pk, pd, m)))
+            has_tube = has_tube or pk == "tube"
+    if not has_tube:
+        return None
+    M = sum(e[0] for e in entries)
+    if M <= 0:
+        return None
+    com = sum(e[0] * e[1] for e in entries) / M
+    I = np.zeros((3, 3))
+    for m, pos, Rm, Id in entries:
+        I += Rm @ np.diag(Id) @ Rm.T
+        dv = pos - com
+        I += m * ((dv @ dv) * np.eye(3) - np.outer(dv, dv))
+    w, V = np.linalg.eigh(I)
+    if np.linalg.det(V) < 0:
+        V[:, 0] = -V[:, 0]
+    qx, qy, qz, qw = R.from_matrix(V).as_quat()
+    return ('<inertial pos="%.9g %.9g %.9g" quat="%.9g %.9g %.9g %.9g" mass="%.9g" diaginertia="%.9g %.9g %.9g"/>'
+            % (com[0], com[1], com[2], qw, qx, qy, qz, M, w[0], w[1], w[2]))
+
+
 def build_xml(scene, dt=0.002, floor_mu=0.7):
     groups = {}
     order = []
@@ -101,6 +152,9 @@ def build_xml(scene, dt=0.002, floor_mu=0.7):
         bname = "b_" + key
         bodies.append((bname, idx))
         xml.append(f'<body name="{bname}" pos="{anchor[0]} {anchor[1]} {anchor[2]}">')
+        _inert = _body_inertial_xml(scene, idx, anchor)
+        if _inert:
+            xml.append(_inert)
         if h:
             ax = np.array(h["axis"], float); ax = ax / np.linalg.norm(ax)
             damp = h.get("damp", 0.0)

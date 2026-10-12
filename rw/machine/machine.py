@@ -95,6 +95,7 @@ class Machine:
                                     "Tj", "T_plate", "T_w", "T_cap", "T_tr", "T_cab", "P_invloss", "Vc", "phi", "I_off")}
         self.ylog = []; self.xlog = []
         self.LOG_MAX = 200000            # 日志行数上限；超出后整体 2 倍降采样（内存有界，8 h 长跑 < 约 200 MB）
+        self.EV_MAX = 10000              # 事件条数上限；超出后批量丢弃最旧一半（保留近期事件，内存有界，issue 2031）
         self._log_stride = 1; self._log_n = 0
         self.step_names = {}
         # 能量账
@@ -118,6 +119,8 @@ class Machine:
 
     def ev(self, s):
         self.events.append((round(self.t, 3), s))
+        if len(self.events) > 2 * self.EV_MAX:
+            del self.events[: self.EV_MAX]  # 有界：批量修剪到最近 EV_MAX 条（issue 2031）
 
     def at(self, t, fn, note=None):
         self.sched.append((t, fn, note))

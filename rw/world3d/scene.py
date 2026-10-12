@@ -2,6 +2,7 @@
 是否固定（固定=焊死在大地上，如地基、台虎钳）、组（同组=刚性连接成一个物体，如焊接件）。
 几何来自 trimesh（MIT）。质量=体积×材料密度，所以"钢块比木块重"是真的算出来的。"""
 import json
+import math
 import numpy as np
 import trimesh
 from scipy.spatial.transform import Rotation as R
@@ -36,6 +37,15 @@ for k, v in _prof.PROFILE_KINDS.items():
 class Part:
     def __init__(self, name, kind, dims, mat="Q235", pos=(0, 0, 0), rot=(0, 0, 0), fixed=False, group="", color=None):
         self.name, self.kind, self.dims = name, kind, [float(d) for d in dims]
+        # v0.30 issue 1929：前置几何校验——非法尺寸在建模层明确拒绝，不再留到 MuJoCo 编译才失败
+        if any(not math.isfinite(dv) for dv in self.dims):
+            raise ValueError(f"零件 {name}（{kind}）尺寸必须为有限数：{dims!r}")
+        if kind == "tube":
+            ro, ri, L = self.dims
+            if not (ro > ri >= 0) or L <= 0:
+                raise ValueError(f"零件 {name}（tube）要求 外径>内径≥0 且长度>0，得到 外径={ro} 内径={ri} 长={L}")
+        elif any(dv <= 0 for dv in self.dims):
+            raise ValueError(f"零件 {name}（{kind}）所有尺寸必须为正：{dims!r}")
         self.mat, self.pos, self.rot = mat, [float(p) for p in pos], [float(r) for r in rot]
         self.fixed, self.group, self.color = fixed, group, color
 

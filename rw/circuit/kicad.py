@@ -166,7 +166,11 @@ def import_kicad_net(path, text=None):
                 if nm:
                     fields[nm] = val
         for pr in _find(comp, "property"):
-            fields[_get(pr, "name")] = _get(pr, "value", "")
+            nm, pv = _get(pr, "name"), _get(pr, "value", "")
+            if nm is None and len(pr) >= 3 and isinstance(pr[1], str) and isinstance(pr[2], str):
+                nm, pv = pr[1], pr[2]  # KiCad 位置式 (property "Value" "1k")（issue 1945：原写入 fields[None] 致下游崩溃）
+            if nm:
+                fields[nm] = pv
         lib = (_find(comp, "libsource") or [[]])[0]
         comps[ref] = dict(ref=ref, value=_get(comp, "value", ""), lib=_get(lib, "lib", ""), part=_get(lib, "part", ""),
                           fields=fields, pins={})
@@ -283,10 +287,22 @@ def _by_pins(names):
     return None
 
 
+def _comp_value(cp):
+    """元件值统一提取（issue 1945）：comp 的 value 优先；为空时回退 fields/property 里的
+    Value 字段（大小写不敏感）。冲突时以 comp value 为准。"""
+    v = (cp["value"] or "").strip()
+    if v:
+        return v
+    for k, fv in cp["fields"].items():
+        if k and k.lower() == "value" and isinstance(fv, str) and fv.strip():
+            return fv.strip()
+    return ""
+
+
 def classify(cp, libpins=None):
     """返回 (类型, 依据)。类型：R C L POT FUSE D NPN PNP BJT NMOS PMOS FET IGBT NETTIE V I X XFMR PASSIVE RELAY IC 或 None（判断不出）。"""
     libpins = libpins or {}
-    F, ref, val = cp["fields"], cp["ref"], (cp["value"] or "").strip()
+    F, ref, val = cp["fields"], cp["ref"], _comp_value(cp)
     dev = (F.get("Sim.Device") or F.get("Spice_Primitive") or "").strip().upper()
     typ = (F.get("Sim.Type") or "").strip().upper()
     if dev:
@@ -350,7 +366,7 @@ def _pins_by(cp, libpins, order, ref):
 
 
 def _map_comp(c, cp, libpins):
-    ref, val, part, F = cp["ref"], cp["value"], (cp["part"] or "").upper(), cp["fields"]
+    ref, val, part, F = cp["ref"], _comp_value(cp), (cp["part"] or "").upper(), cp["fields"]
     if F.get("Sim.Enable", F.get("Spice_Netlist_Enabled", "1")).upper() in ("0", "N", "FALSE"):
         return
     if "dnp" in {k.lower() for k in F} or re.search(r"\bDNP\b", val or ""):  # v0.12：不贴装（DNP）元件不进仿真
@@ -627,7 +643,7 @@ def _map_igbt(c, cp, libpins, val, model):
 
 def _map_ic(c, cp, libpins, why):
     """v0.12：常用驱动/LDO 行为级子电路。认出返回 True；否则 False（调用者给"无模型跳过"警告）。"""
-    ref, val = cp["ref"], cp["value"] or ""
+    ref, val = cp["ref"], _comp_value(cp)
     key_s = f"{cp['part'] or ''} {val}".upper()
     for key, d in DL.IC_BEH.items():
         if not re.search(d["match"], key_s):

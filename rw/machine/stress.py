@@ -344,11 +344,12 @@ def _expm(A):
 
 
 def fault_transient(L, C, R, Vbus, f, L_short, R_short, t_fault=0.4e-3, t_end=1.6e-3, prot="hw", I_trip=480.0, t_d=2e-6,
-                    t_sw_period=1e-3, dt=20e-9, R_switch=1e-4):
+                    t_sw_period=1e-3, dt=20e-9, R_switch=1e-4, V_trip=None):
     """串联 RLC（L、C、R 总值）由 ±Vbus 方波（频率 f，固定）驱动；t_fault 时刻串联元件中的 (L_short, R_short) 一段被短路开关并上
     （工件碰线圈/对地打火：工件等效电阻和一部分电感被短接）。拓扑：主回路 L1=L−L_short、R1=R−R_short、C；短接段自成回路
     L_short–R_short–开关（R_switch）。保护：
-      prot="hw"  ：硬件比较器 |i|>I_trip，延时 t_d 后四管全关，电流经二极管回馈母线（逆变器输出 = −sign(i)·Vbus）直到过零；
+      prot="hw"  ：硬件比较器 |i|>I_trip（及 V_trip 给定时 |vC|>V_trip 的电容过压比较器，issue 1821），
+                 延时 t_d 后四管全关，电流经二极管回馈母线（逆变器输出 = −sign(i)·Vbus）直到过零；
       prot="sw"  ：只靠软件环：每 t_sw_period 检查一次（用上一周期电流峰值），超过 I_trip 才关断（最坏情况在故障后约 1 ms）；
       prot="none"：不保护。
     返回 t, i(主回路), vC, 关断时刻, 峰值。离散化：x' = A x + B u，u 分段常数 → 矩阵指数精确。"""
@@ -370,7 +371,7 @@ def fault_transient(L, C, R, Vbus, f, L_short, R_short, t_fault=0.4e-3, t_end=1.
     n = int(round(t_end / dt)); per = 1.0 / f
     x = np.zeros(3)
     out_t = np.empty(n); out_i = np.empty(n); out_v = np.empty(n)
-    t_off = None; tripped = False; trip_seen = None; stopped = False
+    t_off = None; tripped = False; trip_seen = None; stopped = False; trip_cause = None
     pk_win = 0.0; next_chk = t_fault + t_sw_period
     for k in range(n):
         t = k * dt
@@ -401,7 +402,9 @@ def fault_transient(L, C, R, Vbus, f, L_short, R_short, t_fault=0.4e-3, t_end=1.
         if not tripped:
             if prot == "hw":
                 if trip_seen is None and abs(x[0]) > I_trip:
-                    trip_seen = t
+                    trip_seen = t; trip_cause = "OC"
+                if trip_seen is None and V_trip is not None and abs(x[1]) > V_trip:
+                    trip_seen = t; trip_cause = "VC"   # 谐振电容过压硬件比较器（issue 1821）
                 if trip_seen is not None and t >= trip_seen + t_d:
                     tripped = True; t_off = t
             elif prot == "sw":
@@ -414,7 +417,7 @@ def fault_transient(L, C, R, Vbus, f, L_short, R_short, t_fault=0.4e-3, t_end=1.
     return dict(t=out_t, i=out_i, vC=out_v, t_off=t_off, I_pk_after=float(np.abs(out_i[m_after]).max()),
                 I_pk_before=float(np.abs(out_i[(out_t > t_fault - 3 * per) & (out_t < t_fault)]).max()),
                 Vc_pk=float(np.abs(out_v).max()), Vc_pk_before=float(np.abs(out_v[(out_t > t_fault - 3 * per) & (out_t < t_fault)]).max()),
-                i2t=float(np.sum(out_i[m_after] ** 2) * dt))
+                i2t=float(np.sum(out_i[m_after] ** 2) * dt), trip_cause=trip_cause)
 
 
 # ===================================================================== 杂散磁场

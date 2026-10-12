@@ -162,7 +162,32 @@ def run():
           f"{[x['status'] for x in seg]}；钢块下落 { -blk['dz_mm']:.0f} mm（断后不再被托住）")
     assert any(x["status"] != "稳定" for x in seg) and blk["dz_mm"] < -50
     print("[12] 三维装配世界 全部通过")
+    tube_inertia()
     matdb_edge()
+
+
+def tube_inertia():
+    """[12p] v0.30 issue 1929：tube 惯量按圆环公式（显式 <inertial>），非法尺寸建模层拒绝。"""
+    import mujoco
+    from rw.world3d.scene import Scene
+    from rw.world3d.physics import build_xml
+    sc = Scene("t"); part = sc.add("tube", "tube", (100, 80, 1000), mat="Q235", pos=(0, 0, 1000))
+    xml, bodies, _ = build_xml(sc, dt=0.002, floor_mu=0.7)
+    model = mujoco.MjModel.from_xml_string(xml)
+    bi = sorted(float(x) for x in model.body_inertia[1])
+    ro, ri, L, m = 0.05, 0.04, 1.0, part.mass
+    th = sorted([m * (3 * (ro * ro + ri * ri) + L * L) / 12, m * (3 * (ro * ro + ri * ri) + L * L) / 12,
+                 m * (ro * ro + ri * ri) / 2])
+    err = max(abs(bi[k] / th[k] - 1) for k in range(3))
+    assert err < 0.01, (bi, th)
+    print(f"[12p] 圆管惯量: MuJoCo {['%.4f' % x for x in bi]} vs 圆环理论 {['%.4f' % x for x in th]}，偏差 {100 * err:.3f}%（修复前按实心圆柱 1.863/0.0277）")
+    for bad in ((100, 120, 1000), (100, 100, 1000), (100, 80, 0)):
+        try:
+            Scene("bad").add("tube", "tube", bad, mat="Q235")
+            raise AssertionError(f"非法尺寸 {bad} 未被拒绝")
+        except ValueError:
+            pass
+    print("[12p] 非法圆管尺寸（内径>外径/等径/零长）建模层 ValueError（修复前生成负质量到 MuJoCo 才崩）")
 
 
 def matdb_edge():

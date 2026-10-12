@@ -56,6 +56,25 @@ def run():
     bleed = 1.0 - 0.0
     print("[整机] 预充电：t=0.2 s 母线 %.1f V，解析 513·(1−e^(−t/RC)) = %.1f V（泄放电阻 %.0f kΩ 影响 %.2f%%）" % (b.V, th, sp.R_bleed / 1e3, 100 * sp.R_pc / sp.R_bleed))
     assert abs(pct(b.V, th)) < 0.5
+    # (c2) v0.30 issue 1823：预充/泄放改指数精确更新——任意 dt 不过冲；非法参数明确报错
+    G = 1.0 / sp.R_pc + 1.0 / sp.R_bleed
+    Vinf = (513.0 / sp.R_pc) / G
+    th2 = Vinf * (1 - math.exp(-1.0 / (sp.C_bus / G)))
+    vs = []
+    for dt_big in (0.5, 1.0):
+        b2 = Bus(sp); b2.set_contactors(True, False, 513.0)
+        for _ in range(int(round(1.0 / dt_big))):
+            b2.step(dt_big, 513.0, 0.0)
+        assert abs(pct(b2.V, th2)) < 0.1, (dt_big, b2.V, th2)
+        vs.append(b2.V)
+    print("[整机] 预充大步长 dt=0.5/1 s：母线 %.2f/%.2f V，解析 %.2f V（指数精确不过冲，旧格式曾达 1295 V）" % (vs[0], vs[1], th2))
+    for bad in (dict(R_pc=0.0), dict(R_bleed=0.0), dict(C_bus=0.0)):
+        try:
+            Bus(Spec(**bad)); _ok = False
+        except ValueError:
+            _ok = True
+        assert _ok, bad
+    print("[整机] R_pc/R_bleed/C_bus 为零或负：ValueError 明确报错（旧为 ZeroDivisionError）")
     # (d) 整机正常场景：能量守恒、与有限元表对比、节拍
     m, S = SC.run("normal")
     bus = m.bus
@@ -139,8 +158,9 @@ def run_100k():
     assert tr is not None, "冷却能力不足时保护拒动"
     m3, S3 = SC.run("fp_short")
     hw = S3["tr"]["hw"]
-    print("[整机·100kW] 满功率负载短路 + 硬件过流比较器：电流峰值 %.0f A（I_CRM %.0f A），谐振电容峰值 %.0f V" % (hw["I_pk_after"], sp.mod.I_crm, hw["Vc_pk"]))
+    print("[整机·100kW] 满功率负载短路 + 硬件过流/电容过压双比较器：电流峰值 %.0f A（I_CRM %.0f A），谐振电容峰值 %.0f V（额定峰值 2828 V，超额定 %.0f%%——快速关断压不住，选型须按 3.6 kV+ 或加吸收回路，issue 1821 如实说明）" % (hw["I_pk_after"], sp.mod.I_crm, hw["Vc_pk"], 100 * (hw["Vc_pk"] / 2828.0 - 1)))
     assert hw["I_pk_after"] < sp.mod.I_crm
+    assert hw.get("trip_cause") == "VC", hw.get("trip_cause")  # v0.30：电容过压比较器应先于过流比较器动作
 
 
 def run_logcap():
@@ -152,6 +172,12 @@ def run_logcap():
     assert n <= 500 and len(m.ylog) == n and len(m.xlog) == n and all(len(v) == n for v in m.log.values()), n
     assert m.events, "事件丢失"
     print("[整机] 日志有界：3000 扫描 → %d 行（上限 500），stride=%d，事件 %d 条" % (n, m._log_stride, len(m.events)))
+    m2 = scenarios.build("normal")
+    for i in range(25000):
+        m2.ev("synthetic-%d" % i)
+    assert len(m2.events) <= 2 * m2.EV_MAX + 1, len(m2.events)
+    assert m2.events[-1][1] == "synthetic-24999", "近期事件应保留"
+    print("[整机] 事件有界：25000 次合成事件 → %d 条（上限 2×%d），最新事件保留（issue 2031）" % (len(m2.events), m2.EV_MAX))
 
 
 def run_sanity():
