@@ -81,9 +81,11 @@ class EMPage(QtWidgets.QWidget):
         # ---- 2 三维涡流
         w2 = QtWidgets.QWidget(); l2 = QtWidgets.QVBoxLayout(w2)
         top2 = QtWidgets.QHBoxLayout()
+        self.shape3 = QtWidgets.QComboBox(); self.shape3.addItems(["圆管", "方坯 20×20 (gmsh)"])
         self.ecc = QtWidgets.QDoubleSpinBox(); self.ecc.setRange(0, 4); self.ecc.setValue(3.0); self.ecc.setSingleStep(0.5)
         self.btn_3 = QtWidgets.QPushButton("▶ 重新计算三维 (约 1–3 分钟)")
         self.btn_3.clicked.connect(self.run_3d)
+        top2.addWidget(QtWidgets.QLabel("工件")); top2.addWidget(self.shape3)
         top2.addWidget(QtWidgets.QLabel("偏心 mm")); top2.addWidget(self.ecc); top2.addWidget(self.btn_3); top2.addStretch(1)
         l2.addLayout(top2)
         self.c_3d = _Canvas(); l2.addWidget(self.c_3d, 1)
@@ -133,10 +135,20 @@ class EMPage(QtWidgets.QWidget):
         self.btn_3.setEnabled(False)
         self.t_3d.setPlainText("三维求解中 … (棱边单元 + 直接法，内存约 1 GB)")
         e = self.ecc.value()
+        billet = self.shape3.currentIndex() == 1
 
         def job():
+            if billet:
+                from .em.eddy3d_gmsh import study_billet
+                r = study_billet(ecc_mm=e)
+                r["_kind"] = "billet"
+                return r
             from .em.eddy3d import study_3d
-            return study_3d(ecc_mm=e)
+            r = study_3d(ecc_mm=e)
+            r["_kind"] = "tube"
+            return r
+        if billet:
+            self.t_3d.setPlainText("方坯三维求解中 … (gmsh 非结构网格 ×2 例，约 30–60 秒)")
         _spawn(self, job, self._done_3d, self._err_3d)
 
     def _done_3d(self, res):
@@ -150,6 +162,17 @@ class EMPage(QtWidgets.QWidget):
         if not res:
             self.t_3d.setPlainText("还没有三维结果，点“重新计算三维”。")
             return
+        if res.get("_kind") == "billet":
+            ev.plot_billet(self.c_3d.fig, res); self.c_3d.draw()
+            e0, e1 = res["ecc0"], res["ecc"]
+            self.t_3d.setPlainText(
+                f"方坯 20×20 (gmsh 非结构网格, {e0['tets']} 四面体): 同心 {e0['P']/1e3:.3f} kW (每 1 kA 安匝)，"
+                f"偏心 {e1['ecc_mm']:g} mm {e1['P']/1e3:.3f} kW ({100*(e1['P']/e0['P']-1):+.1f}%)。\n"
+                f"表层/心部功率密度 {e0['skin']:.1f}× (集肤效应)，角部/面心 {e0['corner']:.2f} (<1 是 δ 尺度的「冷角」regime: 两侧表面感应电流相消)，"
+                f"左右对称 {e0['sym']:.3f}；人为空气电导假损耗 {100*e0['P_air']/e0['P']:.2f}%。\n"
+                "⚠ 最低阶棱边单元 + 粗网格(h≈3 mm≈δ)，定量精度 ~5–10%，角部奇异性未分辨；"
+                "同几何空心管对照: vs 结构网格 +2.7% / vs 二维轴对称 +0.2% (validate §11g)。")
+            return
         ev.plot_3d(self.c_3d.fig, res); self.c_3d.draw()
         e0, e1 = res["ecc0"], res["ecc"]
         sp = np.array(e1["sectors"])
@@ -159,4 +182,4 @@ class EMPage(QtWidgets.QWidget):
             f"同心时各方位功率最大/最小 = {max(e0['sectors'])/min(e0['sectors']):.3f} (轴对称应为 1)。\n"
             f"偏心 {e1['ecc_mm']:g} mm: 管壁各方位功率最大/最小 = {sp.max()/sp.min():.2f}，总功率变化 {100*(e1['P_3d']/e0['P_3d']-1):+.1f}%。\n"
             f"规范用的人为空气电导 σ=1 S/m 引起的假损耗占 {100*e0['P_air']/e0['P_3d']:.2f}%。\n"
-            "⚠ 最低阶棱边单元 + 粗网格(管壁 3 层)，估计总功率精度 ~5–10%；非圆截面/开缝需要 gmsh(x86 才有 pip 包)。")
+            "⚠ 最低阶棱边单元 + 粗网格(管壁 3 层)，估计总功率精度 ~5–10%；非圆截面选上面「方坯」(需 pip install gmsh)。")
