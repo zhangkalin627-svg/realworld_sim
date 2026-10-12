@@ -1,5 +1,17 @@
 # 更新记录
 
+## v0.6 （2026-10-12）
+- 新增 ⑥ 电路/示波器：用 ngspice（BSD-3，外部程序）做瞬态/交流/直流仿真；自己写的 MIT 薄封装 `rw/circuit/spice.py`
+  （Python 搭电路 → netlist → `ngspice -b` → 读 raw 文件），不依赖 PySpice
+- KiCad 网表导入 `rw/circuit/kicad.py`：SPICE 网表（.cir）和 KiCad 网表（.net，S 表达式，支持 Sim.Device/Sim.Type/Sim.Params/Sim.Pins）；
+  映射不了的元件列为警告，不瞎猜；附公开示例网表 models/netlists/
+- 虚拟示波器引擎 `rw/circuit/scope.py`：4 通道（任意网络、两网络差分 a-b、电流 i(V1)）、伏/格、偏移、DC/AC 耦合；时基、水平位置；
+  边沿触发（源/上升下降/电平/Auto Normal Single）；时间与电压光标（Δt、1/Δt、ΔV）；自动测量（Vpp Vmax Vmin Vavg Vrms 频率 周期 占空比 上升/下降时间）；
+  FFT（矩形/汉宁/汉明/布莱克曼/平顶窗，dBV）；Auto Set
+- 示例电路：RC 方波、RLC 串联谐振、桥式整流+电容滤波、运放方波振荡器、MOSFET 半桥+串联谐振负载（感应加热拓扑，通用参数）
+- 私有电路板入口：models/private_boards/（不进公开仓库）
+- validate.py 第 8 段：RC τ / 上升时间、RLC 谐振频率与振铃频率、整流纹波、FFT 基波与 3/5 次谐波、示波器测量 vs 解析值、KiCad 两种格式导入一致性
+
 ## v0.5 （2026-10-12）
 - 新增 ⑤ 材料库：118 种元素周期表（按密度/熔点/电导/导热/模量/晶体结构/价格着色，点元素看全部物性）
 - 31 个常用牌号（碳钢、合金钢、铸铁、不锈钢、殷钢、铝/镁/钛合金、紫铜、黄铜、青铜、康铜、蒙乃尔、镍铬、Inconel 718、焊锡、925 银、钨铜）
