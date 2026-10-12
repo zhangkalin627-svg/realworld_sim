@@ -157,7 +157,111 @@ def run():
     qp = rr["links"]["离心泵"]["Q"]
     assert abs(qa - qb) < 1e-9 and abs(qp - qa - qb) < 1e-9 and nn.converged
     print(f"[13j] 示例两工位喷淋: 泵 {qp*6e4:.1f} L/min = 2×{qa*6e4:.1f}，泵轴功率 {rr['links']['离心泵']['P_shaft']:.0f} W，射流 {rr['links']['喷淋孔A']['v_jet']:.1f} m/s")
+
+    # z) 回归（问题单 20261012-1825-flow-cavitation-nonwater）：非清水介质也必须判汽蚀
+    from rw.world.fluids import water_psat as _wpsat, custom_fluid as _cf
+    nw = example_two_station(fluid="water", T=80.0, dirty=60.0); cw = nw.checks(nw.solve())
+    npw = example_two_station(fluid="pag10", T=80.0, dirty=60.0); cp = npw.checks(npw.solve())
+    pv_p = npw.vapor_pressure(); pv_ref = _wpsat(79.5)
+    assert pv_p is not None and abs(pv_p / pv_ref - 1) < 0.01, (pv_p, pv_ref)
+    assert abs(nw.vapor_pressure() / _wpsat(80.0) - 1) < 1e-9          # 清水仍按 Antoine 原值
+    assert any(lv == "FAIL" for lv, _ in cw), cw
+    assert any(lv == "FAIL" for lv, _ in cp), "pag10 80°C 吸入绝压低于蒸气压却未判 FAIL: %r" % cp
+    from rw.flow.network import Network as _Net
+    nc = example_two_station(fluid="water", T=80.0, dirty=60.0); nc.fl = _cf(1000.0, name="无沸点自定义液")
+    cc = nc.checks(nc.solve()); assert nc.vapor_pressure() is None
+    assert any("未判汽蚀" in t for _, t in cc), cc
+    print(f"[13z] 非清水汽蚀: pag10 80°C psat={pv_p/1e3:.2f} kPa vs 水79.5°C {pv_ref/1e3:.2f} kPa，体检判 FAIL；无沸点自定义液明示未判汽蚀")
+
+    _k_cooling()
     print("      全部通过")
+
+
+def _k_cooling():
+    """k) 100 kW 冷却水系统：关联式 vs ht、ε-NTU vs ht/解析、能量守恒、物性 vs CoolProp、RK4 vs 解析指数"""
+    from rw.flow import cooling as CL
+    try:
+        import ht
+    except Exception:
+        ht = None
+    try:
+        import CoolProp.CoolProp as CP
+    except Exception:
+        CP = None
+    # Gnielinski
+    if ht is not None:
+        w = 0
+        for Re in (5e3, 1e4, 3e4, 1e5, 5e5):
+            for Pr in (0.7, 3.0, 7.0, 50.0):
+                a = CL.nu_gnielinski(Re, Pr); b = ht.conv_internal.turbulent_Gnielinski(Re=Re, Pr=Pr, fd=(0.790*math.log(Re)-1.64)**-2)
+                w = max(w, abs(a / b - 1))
+        print(f"[13k] Gnielinski Nu(20 组) vs ht.turbulent_Gnielinski: 最大偏差 {100*w:.4f}%")
+        assert w < 1e-6
+        w = 0
+        for NTU in (0.2, 1.0, 3.0, 8.0):
+            for Cr in (0.0, 0.3, 0.7, 1.0):
+                a = CL.eps_counterflow(NTU, Cr); b = ht.effectiveness_from_NTU(NTU=NTU, Cr=Cr, subtype="counterflow")
+                w = max(w, abs(a - b))
+        print(f"      逆流 ε-NTU(16 组) vs ht.effectiveness_from_NTU: 最大绝对偏差 {w:.2e}")
+        assert w < 1e-9
+    else:
+        print("[13k] 未装 ht，Gnielinski/ε-NTU 对照跳过")
+    # 物性/露点 vs CoolProp
+    if CP is not None:
+        wc = wk = 0
+        for T in (10, 25, 40, 60, 80):
+            wc = max(wc, abs(CL.water_cp(T) / CP.PropsSI("C", "T", T + 273.15, "P", 101325, "Water") - 1))
+            wk = max(wk, abs(CL.water_k(T) / CP.PropsSI("L", "T", T + 273.15, "P", 101325, "Water") - 1))
+        wd = 0
+        for Ta, RH in ((25, 0.5), (35, 0.7), (40, 0.9), (20, 0.3)):
+            ref = CP.HAPropsSI("D", "T", Ta + 273.15, "P", 101325, "R", RH) - 273.15
+            wd = max(wd, abs(CL.dew_point(Ta, RH) - ref))
+        print(f"      水 cp/k vs CoolProp(IAPWS-95): 最大偏差 {100*wc:.3f}% / {100*wk:.3f}%；露点 Magnus vs CoolProp HAPropsSI 最大差 {wd:.2f} K")
+        assert wc < 2e-3 and wk < 1e-2 and wd < 0.5
+    else:
+        print("      未装 CoolProp，物性/露点对照跳过")
+    # 系统：100 kW 与 14 kW
+    for P in (100e3, 14e3):
+        s = CL.CoolingSystem(P_out=P); r = s.solve()
+        assert r["net"].converged
+        hx = r["hx"]
+        # 板换: Q = UA·LMTD 自洽、两侧热平衡
+        Q_lm = s.hx.UA * hx["LMTD"]
+        assert abs(Q_lm / r["Q_tot"] - 1) < 1e-6, (Q_lm, r["Q_tot"])
+        # 支路流量和 = 泵流量；支路热之和 = 损耗之和
+        Qb = sum(x["Q_Lmin"] for x in r["branches"]) / 6e4
+        assert abs(Qb / r["pump"]["Q"] - 1) < 1e-6
+        print(f"      {P/1e3:.0f} kW: 总热 {r['Q_tot']/1e3:.2f} kW，泵 {r['pump']['Q_Lmin']:.1f} L/min，供/回水 {r['T_sup']:.1f}/{r['T_ret']:.1f} °C，"
+              f"板换 ε={hx['eps']:.3f}，UA·LMTD/Q={Q_lm/r['Q_tot']:.6f}；冷水机 {r['chiller']['hp']} HP（余量 {r['chiller']['margin']:.2f}）")
+        for row in CL.report_rows(r):
+            print("        " + " | ".join(row))
+        for lv, msg in r["alarms"]:
+            print(f"        [{lv}] {msg}")
+        if P == 100e3:
+            coil = [x for x in r["branches"] if x["name"] == "感应器线圈"][0]
+            assert 15e3 < coil["P"] < 22e3 and coil["T_wall"] < coil["Tsat"]
+            # 跳闸升温：RK4 vs 解析线性 T0 + Q t/(M cp)
+            tr = s.trip_transient(r, t_end=300.0, dt=1.0)
+            cp = CL.water_cp(r["T_sup"])
+            T_th = r["T_sup"] + r["Q_tot"] * 300.0 / (tr["M"] * cp)
+            assert abs(tr["T_sup"][-1] - T_th) < 1e-9
+            # 冷水机在线、初值偏离：回到稳态的指数解
+            r2 = dict(r); r2["T_sup"] = r["T_sup"] + 5.0
+            tr2 = s.trip_transient(r2, t_end=600.0, dt=1.0, chiller_on=True)
+            cp2 = CL.water_cp(r2["T_sup"])          # trip_transient 用初值温度的 cp
+            Ch = r["m_h"] * cp2; Cmin = min(Ch, s.m_chw * CL.water_cp(s.T_chw)); k = hx["eps"] * Cmin
+            Mcp = tr2["M"] * cp2
+            Tinf = s.T_chw - r["Q_tot"] / Ch + r["Q_tot"] / k
+            T_ex = Tinf + (r2["T_sup"] - Tinf) * math.exp(-k * 600.0 / Mcp)
+            err = abs(tr2["T_sup"][-1] - T_ex)
+            fa = {kk: v for kk, v in tr["first_alarm"].items() if v is not None}
+            print(f"      冷水机跳闸 300 s: 供水 {r['T_sup']:.1f}→{tr['T_sup'][-1]:.1f} °C（RK4 = 解析线性）；冷水机在线 +5 K 扰动 600 s 后 RK4 vs 解析指数差 {err:.1e} K，"
+                  f"稳态 T∞={Tinf:.2f} vs 求解 {r['T_sup']:.2f} °C；首个报警 {fa if fa else '300 s 内无'}")
+            assert err < 1e-8 and abs(Tinf - r["T_sup"]) < 0.05
+
+
+if __name__ == "__main__":
+    run()
 
 
 if __name__ == "__main__":
