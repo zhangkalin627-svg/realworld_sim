@@ -223,14 +223,44 @@ class Network:
                             p_abs=P_ATM + ptot - dyn)
         return dict(nodes=nodes, links=links, rho=rho, mu=mu, T=self.T)
 
+    def vapor_pressure(self, T=None):
+        """介质在 T(°C，默认 self.T) 下的饱和蒸气压 Pa。清水用 Antoine；其余介质由 fluid["tsat"](p)
+        （沸点随压力单调增）在 [1 Pa, 22 MPa] 上对数二分反解 tsat(p)=T。没有沸点数据（tsat 恒为大值）
+        或 T 超出该压力范围对应的沸点区间时返回 None（下限以下返回 0：几乎不挥发）。"""
+        T = self.T if T is None else float(T)
+        if self.fl["name"] == "清水":
+            return water_psat(T)
+        tsat = self.fl.get("tsat")
+        if tsat is None:
+            return None
+        lo, hi = 1.0, 22e6
+        try:
+            t_lo, t_hi = float(tsat(lo)), float(tsat(hi))
+        except Exception:
+            return None
+        if not (math.isfinite(t_lo) and math.isfinite(t_hi)) or t_hi - t_lo < 1e-6 or t_lo > 1e5:
+            return None                      # 无沸点数据（custom_fluid 未给 tsat → 恒 1e9）
+        if T <= t_lo:
+            return 0.0
+        if T >= t_hi:
+            return None                      # 超临界/超出范围：不判
+        for _ in range(80):
+            m = math.sqrt(lo * hi)
+            if tsat(m) < T:
+                lo = m
+            else:
+                hi = m
+        return math.sqrt(lo * hi)
+
     def checks(self, res, v_limit=3.0, margin=2.0):
         """体检：汽蚀(泵吸入口、任何点低于饱和蒸气压)、流速、管/软管额定压力、泵 NPSH、泵偏离最佳点。
         返回 [(OK/WARN/FAIL, 文字)]"""
         out = []
         rho = self.rho
-        pv = water_psat(self.T) if self.fl["name"] in ("清水", "海水") else None
+        pv = self.vapor_pressure()
         if pv is None:
-            pv = 0.0  # 非水介质没有蒸气压数据时不判汽蚀（见 notes）
+            out.append(("WARN", f"介质「{self.fl['name']}」无沸点数据，未判汽蚀（NPSHa 按蒸气压 0 计，偏乐观）"))
+            pv = 0.0
         for n, r in res["nodes"].items():
             if self.nodes[n].kind != "junction": continue
             if pv > 0 and r["p_abs"] < pv:
