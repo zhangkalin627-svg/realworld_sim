@@ -1,4 +1,4 @@
-"""真实的世界 v0.3：感应加热淬火 + 结构校核 + PLC 虚拟调试（桌面程序）
+"""真实的世界 v0.5：感应加热淬火 + 结构校核 + PLC 虚拟调试 + 物理沙盒 + 材料库（桌面程序）
 运行:  python3 app.py
 """
 import sys, warnings, traceback
@@ -181,7 +181,7 @@ class InductionPage(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("真实的世界 v0.4")
+        self.setWindowTitle("真实的世界 v0.5")
         self.resize(1500, 900)
         import os
         from rw.gui_world import WorldPage
@@ -204,6 +204,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.st_tabs, self.plc_tabs = st, pl
         self.world = WorldPage()
         self.top.addTab(self.world, "④ 物理沙盒")
+        from rw.gui_materials import MaterialsPage
+        self.mat = MaterialsPage()
+        self.top.addTab(self.mat, "⑤ 材料库")
         self.setCentralWidget(self.top)
 
 
@@ -225,6 +228,13 @@ def main():
             if sub == 0:
                 pg = w.world.tabs.widget(0)
                 pg.fluid.setCurrentIndex(0); pg.T.setValue(150); pg.depth.setValue(50)
+            QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
+        elif which.startswith("mat"):
+            w.top.setCurrentWidget(w.mat)
+            sub = int(which[-1]) if which[-1].isdigit() else 0
+            w.mat.tabs.setCurrentIndex(sub)
+            if sub == 0:
+                w.mat.pt.prop.setCurrentIndex(1); w.mat.pt.show_el("Ag")
             QtCore.QTimer.singleShot(1200, lambda: (w.grab().save(out), app.quit()))
         elif which == "plcdemo":
             w.top.setCurrentIndex(2); w.plc_tabs.setCurrentWidget(w.plc_demo)
