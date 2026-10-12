@@ -99,6 +99,11 @@ def run_materials(params, progress):
     return {"lines": lines, "warnings": [], "plots": [], "raw": {}}
 
 
+def _w3d(params, progress):
+    from .w3d import run_world3d
+    return run_world3d(params, progress)
+
+
 MODULES = [
     {"key": "induction", "name": "感应加热淬火", "desc": "瓶坯感应加热 + 喷淋淬火全过程：温度场、硬度、硬化层深度",
      "fields": [
@@ -125,4 +130,13 @@ MODULES = [
      "run": run_induction},
     {"key": "materials", "name": "材料库", "desc": "45 钢关键相变点 + 淬火介质换热参数（只读查询）",
      "fields": [], "run": run_materials},
+    {"key": "world3d", "name": "三维装配世界", "desc": "零件摆放 → 刚体物理仿真 → 受力体检（稳定性/梁应力/螺栓/轴承/赫兹），浏览器 3D 动画回放",
+     "fields": [
+         {"name": "preset", "label": "示例场景", "type": "select", "default": "工字钢梁桥",
+          "options": ["钢板桥：两墩 + 铜块", "叠积木 外伸系数 0.95（应稳）", "叠积木 外伸系数 1.10（应倒）", "橡胶块在 22° 斜面（会倒）",
+                      "钢块在 30° 斜面（会滑）", "钢块砸木板", "水里的浮沉", "焊接台架 + 偏载", "工字钢梁桥",
+                      "壁挂支架 + 螺栓组", "轴承转子 3000rpm", "玻璃板断裂演示", "焊缝悬臂支架"]},
+         {"name": "tmax", "label": "仿真时长上限 s", "type": "number", "default": 8, "min": 1, "max": 15, "step": 1},
+     ],
+     "run": _w3d},
 ]

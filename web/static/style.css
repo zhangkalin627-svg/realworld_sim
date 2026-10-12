@@ -25,3 +25,9 @@ label.ck { justify-content: flex-start; }
 #warns div { background: #fff4e5; border-left: 3px solid #f0a030; padding: 6px 10px; margin: 6px 0; font-size: 13px; border-radius: 4px; }
 #plots svg { max-width: 48%; height: auto; margin: 6px 1%; border: 1px solid #eee; border-radius: 6px; }
 .err { color: #b00; font-size: 12px; white-space: pre-wrap; }
+#v3d { margin-top: 10px; }
+#v3d canvas { border: 1px solid #e3e6ea; border-radius: 8px; }
+.v3dbar { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.v3dbar button { padding: 5px 14px; background: #2f6fed; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+.v3dbar input[type=range] { flex: 1; }
+.v3dbar span { font-size: 12px; color: #666; white-space: nowrap; }

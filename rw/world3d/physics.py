@@ -121,17 +121,25 @@ def build_xml(scene, dt=0.002, floor_mu=0.7):
     xml.append('<contact>')
     n = len(scene.parts)
     fm = MU.get(scene.floor_mat, 0.7)
+
+    def gnames(p):
+        # 多图元零件（型材分解为 翼缘/腹板 等多个 box）每个图元是独立 geom，接触对必须逐一列出
+        return [p.name if k == 0 else f"{p.name}#{k}" for k in range(len(p.primitives()))]
+
     for i in range(n):
         pi = scene.parts[i]
         if not pi.fixed:
             mu = min(fm, MU.get(pi.mat, 0.5))
-            xml.append(f'<pair geom1="__floor__" geom2="{pi.name}" friction="{mu} {mu} 0.005 0.0001 0.0001"/>')
+            for g2 in gnames(pi):
+                xml.append(f'<pair geom1="__floor__" geom2="{g2}" friction="{mu} {mu} 0.005 0.0001 0.0001"/>')
         for j in range(i + 1, n):
             pj = scene.parts[j]
             if bodyof[i] == bodyof[j] or (pi.fixed and pj.fixed):
                 continue
             mu = min(MU.get(pi.mat, 0.5), MU.get(pj.mat, 0.5))
-            xml.append(f'<pair geom1="{pi.name}" geom2="{pj.name}" friction="{mu} {mu} 0.005 0.0001 0.0001"/>')
+            for g1 in gnames(pi):
+                for g2 in gnames(pj):
+                    xml.append(f'<pair geom1="{g1}" geom2="{g2}" friction="{mu} {mu} 0.005 0.0001 0.0001"/>')
     xml.append('</contact></mujoco>')
     return "\n".join(xml), bodies, geom_part
 
