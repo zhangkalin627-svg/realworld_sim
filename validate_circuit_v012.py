@@ -161,18 +161,29 @@ def run():
         assert all(b > a for a, b in zip(ts, ts[1:])), (t0, ts[:6])
     print("  [通过] 7a2 浪涌 PWL 时间点严格递增（repr 精度，t0=10/45 ms 附近 20 ns 间隔不撞车）")
 
-    # 7b) LL 浪涌极性：正浪涌正向叠加在 L1 相上，不得反向注入负尖峰（issue 1952，v0.30 修复）
+    # 7b) LL 浪涌极性：带/不带浪涌差值法（卡布 v0.30 回归：负载端经串联阻抗，增量≠源侧峰值，
+    #     旧断言 max>相峰+700 把源峰值当成负载端增量，方法错误；A/B 差值才是极性/幅值的正确判据）
     if find_ngspice():
-        g = Circuit("surge-ll")
-        DL.add_grid(g, ("L1", "L2", "L3"), vll=380, f=50, surge=2, surge_mode="LL", surge_t0=0.01)
-        for ln in ("L1", "L2", "L3"):
-            g.R("load" + ln, ln, "0", 100)
-        wg = g.tran(2e-7, 0.011, tmax=2e-7)
-        v1 = np.asarray(wg["v(l1)"])
+        def _ll(with_surge):
+            g = Circuit("surge-ll")
+            kw = dict(vll=380, f=50)
+            if with_surge:
+                kw.update(surge=2, surge_mode="LL", surge_t0=0.01)
+            DL.add_grid(g, ("L1", "L2", "L3"), **kw)
+            for ln in ("L1", "L2", "L3"):
+                g.R("load" + ln, ln, "0", 100)
+            w = g.tran(2e-7, 0.011, tmax=2e-7)
+            return np.asarray(w["time"]), np.asarray(w["v(l1)"])
+        t0b, vb = _ll(False)
+        t1s, vs = _ll(True)
+        d = vs - np.interp(t1s, t0b, vb)          # 带-不带浪涌差值（时间轴点数不同，插值对齐）
+        dmax, dmin = d.max(), d.min()
+        t_pk = t1s[d.argmax()]
         vph_pk = 380 * 2 ** 0.5 / 3 ** 0.5
-        chk("7b LL 浪涌极性：L1 正向叠加≈相峰+浪涌、无负向尖峰",
-            v1.max() > vph_pk + 700 and v1.min() > -1.3 * vph_pk,
-            "max %.0f V，min %.0f V（相峰 %.0f V）" % (v1.max(), v1.min(), vph_pk))
+        chk("7b LL 浪涌极性：正浪涌正向叠加（A/B 差值法），无负向注入",
+            dmax > 300 and dmin > -0.25 * dmax and abs(t_pk - 0.01) < 0.001 and vs.min() > -1.3 * vph_pk,
+            "差值 max %+.0f V @ %.4f ms，min %+.0f V；L1 min %.0f V（相峰 %.0f V）"
+            % (dmax, t_pk * 1e3, dmin, vs.min(), vph_pk))
 
     # 8) 应力表分级：600 V 器件在 380/418/456 V 母线（≈电网线电压峰值）下 90/98/108 %
     rows = ST.table([("D", "反压", 380 * 2 ** 0.5, 600), ("D", "反压", 418 * 2 ** 0.5, 600), ("D", "反压", 456 * 2 ** 0.5, 600), ("R", "功率", 0.5, 1)])
