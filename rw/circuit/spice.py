@@ -501,7 +501,7 @@ class Circuit(_Builder):
         L.append(analysis)
         if outfile:
             L += [".control", "set filetype=binary", "run",
-                  f"write {outfile} " + (" ".join(save) if save else "all"), ".endc"]
+                  f"write {outfile} " + (" ".join(save) if save else "all"), "quit", ".endc"]
         L.append(".end")
         return "\n".join(L) + "\n"
 

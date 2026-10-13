@@ -1,5 +1,11 @@
 # 更新记录
 
+## 2026-10-13 ngspice 批模式控制段结束兼容修复
+- ngspice 36 下控制段 run/write 已生成结果，但控制段结束后批模式仍检查 .print/.plot 并返回 rc=1。按 ngspice 官方控制语言示例，在 write 后显式 quit，让成功控制脚本正常结束。
+- 非零返回码拒绝规则不变；缺模型/非法分析、普通非零、SIGKILL、缺失/截断输出仍须拒绝，不用“有 raw 文件”放行。
+- 新增 tools/test_spice_batch.py 五组回归通过；validate_circuit.py 通过（含 v0.12 器件库 24/24）。ngspice 36 在本次环境实跑，不代表所有版本兼容已验证。
+- 来源：https://ngspice.sourceforge.io/ngspice-control-language-tutorial.html （纯文件输出的控制脚本 write 后用 quit）。
+
 ## 2026-10-13 PLC 空程序装载校验补漏（v0.30.2 后续修复）
 - 本地复现：空字符串、空白或仅注释的指令表会在读取最后一条指令时抛裸 IndexError。
 - 现装载期明确拒绝空程序，返回带行号的 ValueError；不改变有效指令表的扫描语义。
