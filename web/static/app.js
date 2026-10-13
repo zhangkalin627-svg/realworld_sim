@@ -122,7 +122,7 @@ function poll(jid) {
   pollTimer = setTimeout(async () => {
     const j = await (await fetch(`/api/job/${jid}`)).json();
     $('#barfill').style.width = `${(j.progress * 100).toFixed(0)}%`;
-    if (j.status === 'running') return poll(jid);
+    if (j.status === 'running' || j.status === 'queued') return poll(jid);
     renderResult(j); loadJobs();
   }, 700);
 }
@@ -135,12 +135,12 @@ async function loadJobs() {
   const names = {}; (window._mods || []).forEach(m => names[m.key] = m.name);
   host.innerHTML = r.jobs.map(j => {
     const t = new Date(j.created * 1000);
-    const icon = {done: '✅', running: '⏳', error: '❌', interrupted: '⛔'}[j.status] || '?';
+    const icon = {done: '✅', running: '⏳', queued: '⏳', error: '❌', interrupted: '⛔'}[j.status] || '?';
     return `<div class="jobrow" data-jid="${j.id}">${icon} ${esc(names[j.module] || j.module)} <span class="muted">${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span></div>`;
   }).join('');
   host.querySelectorAll('.jobrow').forEach(el => el.onclick = async () => {
     const j = await (await fetch(`/api/job/${el.dataset.jid}`)).json();
-    if (j.status === 'running') { $('#status').textContent = '该任务还在运行'; return; }
+    if (j.status === 'running' || j.status === 'queued') { $('#status').textContent = '该任务还在运行'; return; }
     $('#lines').innerHTML = ''; $('#warns').innerHTML = ''; $('#plots').innerHTML = '';
     renderResult(j);
   });

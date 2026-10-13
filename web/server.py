@@ -84,6 +84,8 @@ def start_sim(key: str, req: RunReq):
             STORE.set_progress(jid, f); last[0], last[1] = f, time.time()
 
     def job():
+        STORE.set_running(jid)
+        print(f"[job {jid}] start {key} t={time.strftime('%H:%M:%S')} poolq={_pool._work_queue.qsize()}", flush=True)
         try:
             if mod.get("ckpt"):
                 import json as _json
@@ -92,9 +94,11 @@ def start_sim(key: str, req: RunReq):
             else:
                 res = mod["run"](params, on_progress)
             STORE.set_done(jid, res)
+            print(f"[job {jid}] done t={time.strftime('%H:%M:%S')}", flush=True)
         except Exception as e:
             traceback.print_exc()                       # 完整堆栈只留在服务器日志，不回给客户端
             STORE.set_error(jid, f"{type(e).__name__}: {e}")
+            print(f"[job {jid}] error t={time.strftime('%H:%M:%S')}", flush=True)
 
     _pool.submit(job)
     return {"job": jid}
