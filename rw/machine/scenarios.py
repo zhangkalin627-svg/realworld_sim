@@ -175,7 +175,7 @@ def short_transients(sp, s_pre, Vbus):
         # v0.30 issue 1821：硬件路径加谐振电容过压比较器（动作点 = 额定峰值的 95%）。
         # 只靠过流比较器时短路后电容冲到 3157 V > 额定峰值 2828 V；加快压比较器后约 3130 V，
         # 仍超额定 10%——快速关断无法完全压住（关断后电感储能继续灌入电容），残差如实进 verdict
-        vc_peak_rated = getattr(getattr(sp, "cs", None), "Vc_rated", 2000.0) * math.sqrt(2)
+        vc_peak_rated = getattr(getattr(sp, "cool", None), "Vc_rated", 2000.0) * math.sqrt(2)  # v0.30.1：属性名是 cool 不是 cs（Pally 审查发现，原先静默落到默认值）
         res[prot] = ST.fault_transient(L, sp.C_res, Rc + Rw, Vbus, f, L_short=1e-9 + 0.0 * L, R_short=Rw, prot=prot,
                                        I_trip=sp.I_trip_pk, t_end=1.8e-3, dt=25e-9,
                                        V_trip=(0.95 * vc_peak_rated if prot == "hw" else None))

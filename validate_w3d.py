@@ -181,7 +181,7 @@ def tube_inertia():
     err = max(abs(bi[k] / th[k] - 1) for k in range(3))
     assert err < 0.01, (bi, th)
     print(f"[12p] 圆管惯量: MuJoCo {['%.4f' % x for x in bi]} vs 圆环理论 {['%.4f' % x for x in th]}，偏差 {100 * err:.3f}%（修复前按实心圆柱 1.863/0.0277）")
-    for bad in ((100, 120, 1000), (100, 100, 1000), (100, 80, 0)):
+    for bad in ((100, 120, 1000), (100, 100, 1000), (100, 80, 0), (100, 0, 1000), (100, 80)):
         try:
             Scene("bad").add("tube", "tube", bad, mat="Q235")
             raise AssertionError(f"非法尺寸 {bad} 未被拒绝")

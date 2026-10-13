@@ -58,6 +58,11 @@ def run():
             got[kind] = type(e).__name__
     chk("1b 值统一提取（comp/fields 大小写/位置式 property/冲突优先 comp value）",
         all(float(v) == 1000.0 for v in got.values()), str(got))
+    # 1c) v0.30.1：变压器经位置式 property 给值也要读出匝比（_map_xfmr 曾漏改 _comp_value，静默回退 1:1）
+    xt = '(export (version "E") (design (source "t")) (components (comp (ref "T1") (property "Value" "TR 12:1")(property "Sim.Device" "XFMR") (libsource (lib "Device") (part "Transformer_1P_1S")))) (libparts) (nets (net (code "1") (name "a") (node (ref "T1") (pin "1"))) (net (code "2") (name "b") (node (ref "T1") (pin "2"))) (net (code "3") (name "c") (node (ref "T1") (pin "3"))) (net (code "4") (name "d") (node (ref "T1") (pin "4")))))'
+    cx = KI.import_kicad_net(None, xt)
+    xnote = " ".join(cx.warnings) + str(getattr(cx, "notes", {}))
+    chk("1c 变压器 property 取值读出匝比 12:1（v0.30.1 前静默回退 1:1）", "12" in xnote or any("12" in str(e) for e in cx.elements), xnote[:80])
 
     # 2) 小 KiCad 网表：IGBT C/G/E、NetTie、IR2181x、MIC4428、LDO、保险丝、变压器、功率二极管
     comps = " ".join([
@@ -148,6 +153,13 @@ def run():
     tf = 1.67 * (t[i90] - t[i30]); t_half = t[np.where(v > 0.5 * pk)[0][-1]] - (t[i30] - 0.3 / 0.6 * (t[i90] - t[i30]))
     chk("7 浪涌：峰值 1000 V、前沿 1.2 µs、半峰 50 µs（±10 %）", abs(pk - 1000) < 20 and abs(tf - 1.2e-6) < 0.12e-6 and abs(t_half - 50e-6) < 5e-6,
         "峰值 %.0f V，T1 %.2f µs，T2 %.1f µs" % (pk, tf * 1e6, t_half * 1e6))
+
+    # 7a2) v0.30.1：浪涌 PWL 时间点严格递增（%.6g 曾把 t0 附近 20 ns 间隔截成相同时间戳）
+    for t0 in (0.01, 0.045):
+        pts = DL.surge_pwl(1000, t0)
+        ts = [float(repr(float(p[0]))) for p in pts]
+        assert all(b > a for a, b in zip(ts, ts[1:])), (t0, ts[:6])
+    print("  [通过] 7a2 浪涌 PWL 时间点严格递增（repr 精度，t0=10/45 ms 附近 20 ns 间隔不撞车）")
 
     # 7b) LL 浪涌极性：正浪涌正向叠加在 L1 相上，不得反向注入负尖峰（issue 1952，v0.30 修复）
     if find_ngspice():
