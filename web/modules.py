@@ -55,12 +55,18 @@ def _plot(sim, kind, title):
     return {"title": title, "svg": _svg(fig)}
 
 
+def induction_geometry(params):
+    """Shared fast geometry preflight; no solver work or parameter clamping."""
+    from rw.induction import BottleNeckGeometry
+    defaults = dict(neck_od=22, wall=3, neck_len=50, zone=20, coil_id=30, coil_h=25)
+    return BottleNeckGeometry(**{k: params.get(k, v) for k, v in defaults.items()})
+
+
 def run_induction(params, progress, checkpoint=None, resume=None):
     """感应淬火：参数对齐桌面版①页。慢任务（非线性约 ×3），由任务线程跑。支持断点续算 (v0.25)。"""
-    from rw.induction import InductionQuenchSim, BottleNeckGeometry, find_power
+    from rw.induction import InductionQuenchSim, find_power
     f = lambda k, d: float(params.get(k, d))
-    g = BottleNeckGeometry(neck_od=f("neck_od", 22), wall=f("wall", 3), neck_len=f("neck_len", 50),
-                           zone=f("zone", 20), coil_id=f("coil_id", 30), coil_h=f("coil_h", 25))
+    g = induction_geometry(params)
     kw = dict(geom=g, freq=f("freq", 20) * 1e3, t_heat=f("t_heat", 3.0),
               t_quench=f("t_quench", 3.0), t_air=f("t_air", 6.0),
               medium=params.get("medium", "water_spray"),
@@ -209,7 +215,7 @@ MODULES = [
          {"name": "conc", "label": "导磁体", "type": "select", "default": "",
           "options": [{"v": "", "t": "无"}, {"v": "smc", "t": "smc"}, {"v": "sife", "t": "sife"}, {"v": "ferrite", "t": "ferrite"}]},
      ],
-     "run": run_induction, "ckpt": True},
+     "run": run_induction, "validate": induction_geometry, "ckpt": True},
     {"key": "materials", "name": "材料库", "desc": "45 钢关键相变点 + 淬火介质换热参数（只读查询）",
      "fields": [], "run": run_materials},
     {"key": "world3d", "name": "三维装配世界", "desc": "零件摆放 → 刚体物理仿真 → 受力体检（稳定性/梁应力/螺栓/轴承/赫兹），浏览器 3D 动画回放",

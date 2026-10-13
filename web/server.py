@@ -53,6 +53,11 @@ def _validate_params(mod, params):
             out[name] = bool(v)
         elif typ == "textarea" and not isinstance(v, str):
             raise HTTPException(400, f"参数「{lab}」需要文本")
+    if mod.get("validate"):
+        try:
+            mod["validate"](out)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
     return out
 
 

@@ -33,6 +33,36 @@ class BottleNeckGeometry:
 
     def __init__(self, neck_od=22.0, wall=3.0, neck_len=50.0, shoulder_len=30.0, body_od=45.0,
                  coil_id=30.0, coil_radial=6.0, coil_h=25.0, coil_z0=27.0, zone=20.0):
+        values = dict(neck_od=neck_od, wall=wall, neck_len=neck_len,
+                      shoulder_len=shoulder_len, body_od=body_od, coil_id=coil_id,
+                      coil_radial=coil_radial, coil_h=coil_h, coil_z0=coil_z0, zone=zone)
+        for name, value in values.items():
+            try:
+                values[name] = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"几何参数 {name} 必须是有限数值") from None
+            if not np.isfinite(values[name]):
+                raise ValueError(f"几何参数 {name} 必须是有限数值")
+            if name != "coil_z0" and values[name] <= 0:
+                raise ValueError(f"几何参数 {name} 必须 > 0 mm")
+        neck_od, wall, neck_len, shoulder_len, body_od, coil_id, coil_radial, coil_h, coil_z0, zone = (
+            values[k] for k in ("neck_od", "wall", "neck_len", "shoulder_len", "body_od",
+                               "coil_id", "coil_radial", "coil_h", "coil_z0", "zone"))
+        if wall > min(neck_od, body_od) / 2:
+            raise ValueError("壁厚 wall 不能超过瓶颈或瓶身外半径（否则内半径为负）")
+        if zone > neck_len:
+            raise ValueError("淬火区长 zone 不能超过瓶颈长 neck_len")
+        if coil_id < neck_od:
+            raise ValueError("线圈内径 coil_id 不能小于瓶颈外径 neck_od")
+        # Check continuous geometry, including a coil placed beside the shoulder.
+        # Contact (zero gap) and zero inner radius remain available as existing
+        # mathematical limits; this is not a manufacturing-clearance approval.
+        zlo, zhi = max(coil_z0, -shoulder_len), min(coil_z0 + coil_h, neck_len)
+        if zlo < zhi:
+            outer = [neck_od / 2 + (body_od - neck_od) / 2 * np.clip(-z / shoulder_len, 0, 1)
+                     for z in (zlo, zhi)]
+            if coil_id / 2 < max(outer) and coil_id / 2 + coil_radial > min(outer) - wall:
+                raise ValueError("线圈与工件几何重叠，请调整内径或轴向位置")
         self.ro = neck_od / 2
         self.ri = self.ro - wall
         self.wall = wall
@@ -262,6 +292,8 @@ class InductionQuenchSim:
         c = mm.p[:, mm.t].mean(axis=1)           # 单元中心 (mm)
         self.steel_el = g.is_steel(c[0], c[1])
         self.coil_el = g.is_coil(c[0], c[1])
+        if (self.coil_el & self.steel_el).any():
+            raise ValueError("线圈与工件网格重叠，请调整几何参数")
         self.conc_el = self.conc.mask(g, c[0], c[1]) if self.conc is not None else np.zeros_like(self.coil_el)
         self.aux_el = np.zeros_like(self.coil_el)
         self.aux_idx = []
