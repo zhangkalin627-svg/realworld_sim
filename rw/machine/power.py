@@ -107,7 +107,7 @@ class Bus:
     def __init__(self, sp: Spec):
         for f in ("R_pc", "R_bleed", "C_bus"):
             v = getattr(sp, f)
-            if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+            if isinstance(v, bool) or not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
                 raise ValueError(f"母线参数 {f} 必须为正的有限值，得到 {v!r}（issue 1823）")
         self.sp = sp; self.V = 0.0
         self.inrush_peak = 0.0; self.inrush_events = []
@@ -141,7 +141,7 @@ class Bus:
         self.k1, self.k2 = k1, k2
 
     def step(self, dt, Vsrc, P_load):
-        if not (math.isfinite(dt) and dt > 0):
+        if isinstance(dt, bool) or not (math.isfinite(dt) and dt > 0):
             raise ValueError(f"母线步长 dt 必须为正的有限值，得到 {dt!r}（issue 1823）")
         sp = self.sp; V = max(self.V, 1e-3)
         Vold = self.V

@@ -690,7 +690,7 @@ def _map_xfmr(c, cp, libpins):
     nums = sorted(cp["pins"], key=lambda x: (len(x), int(x) if x.isdigit() else 0, x))
     if len(nums) < 4 or len(nums) % 2:
         raise ValueError(f"变压器有 {len(nums)} 个已连接引脚，无法两两配成绕组")
-    p, note = DL.xfmr_params(cp["value"], F)
+    p, note = DL.xfmr_params(_comp_value(cp), F)  # v0.30.1：漏改统一取值（Pally 审查发现，property Value 指定的变压器曾静默回退 1:1）
     nw = len(nums) // 2
     ratios = (p["ratios"] + [p["ratios"][-1]] * nw)[: nw - 1]
     if len(p["ratios"]) < nw - 1:

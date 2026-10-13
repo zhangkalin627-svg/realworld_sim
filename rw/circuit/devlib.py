@@ -397,7 +397,7 @@ def add_grid(c, lines=("L1", "L2", "L3"), neutral=None, vll=380.0, f=50.0, prese
             vp = SURGE_LEVELS.get(surge, surge)
             t0 = surge_t0 if surge_t0 is not None else 2.0 / f + 0.25 / f
             pts = surge_pwl(vp, t0)
-            c.raw(f"Vsurge grid_{ln}_g {src} PWL(" + " ".join("%.6g %.6g" % p for p in pts) + ")")
+            c.raw(f"Vsurge grid_{ln}_g {src} PWL(" + " ".join(repr(float(p[0])) + " " + repr(float(p[1])) for p in pts) + ")")
             c.R("surge", f"grid_{ln}_g", f"grid_{ln}_z", surge_z)
             nxt = f"grid_{ln}_z"
         c.L(f"grid_{ln}", nxt, f"grid_{ln}_r", zs[0])
@@ -406,7 +406,7 @@ def add_grid(c, lines=("L1", "L2", "L3"), neutral=None, vll=380.0, f=50.0, prese
         vp = SURGE_LEVELS.get(surge, surge)
         t0 = surge_t0 if surge_t0 is not None else 2.0 / f + 0.25 / f
         pts = surge_pwl(vp, t0)
-        c.raw("Vsurge surge_s 0 PWL(" + " ".join("%.6g %.6g" % p for p in pts) + ")")
+        c.raw("Vsurge surge_s 0 PWL(" + " ".join(repr(float(p[0])) + " " + repr(float(p[1])) for p in pts) + ")")
         c.R("surge", "surge_s", "surge_c", 10.0)
         c.C("surge", "surge_c", lines[0], 9e-6)
     out = f"电网 {desc}，相电压峰值 {vph:.1f} V，电网阻抗 {zs[0] * 1e6:g} µH + {zs[1]:g} Ω/相（假设）"

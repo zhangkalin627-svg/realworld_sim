@@ -38,12 +38,15 @@ class Part:
     def __init__(self, name, kind, dims, mat="Q235", pos=(0, 0, 0), rot=(0, 0, 0), fixed=False, group="", color=None):
         self.name, self.kind, self.dims = name, kind, [float(d) for d in dims]
         # v0.30 issue 1929：前置几何校验——非法尺寸在建模层明确拒绝，不再留到 MuJoCo 编译才失败
+        _DIM_N = {"box": 3, "cyl": 2, "tube": 3, "sphere": 1}
+        if kind in _DIM_N and len(self.dims) != _DIM_N[kind]:
+            raise ValueError(f"零件 {name}（{kind}）需要 {_DIM_N[kind]} 个尺寸，得到 {len(self.dims)} 个：{dims!r}")
         if any(not math.isfinite(dv) for dv in self.dims):
             raise ValueError(f"零件 {name}（{kind}）尺寸必须为有限数：{dims!r}")
         if kind == "tube":
             ro, ri, L = self.dims
-            if not (ro > ri >= 0) or L <= 0:
-                raise ValueError(f"零件 {name}（tube）要求 外径>内径≥0 且长度>0，得到 外径={ro} 内径={ri} 长={L}")
+            if not (ro > ri > 0) or L <= 0:
+                raise ValueError(f"零件 {name}（tube）要求 外径>内径>0 且长度>0（实心圆柱请用 cyl），得到 外径={ro} 内径={ri} 长={L}")
         elif any(dv <= 0 for dv in self.dims):
             raise ValueError(f"零件 {name}（{kind}）所有尺寸必须为正：{dims!r}")
         self.mat, self.pos, self.rot = mat, [float(p) for p in pos], [float(r) for r in rot]
