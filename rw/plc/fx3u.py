@@ -79,6 +79,8 @@ class FX3U:
             parts = ln.split()
             self.prog.append((parts[0].upper(), parts[1:]))
             self.prog_lines.append(n)
+        if not self.prog:
+            raise ValueError('第1行：程序为空（至少需要 END 指令）')
         if self.prog[-1][0] != 'END':
             raise ValueError('program must end with END')
         # ---- 装载期静态校验：操作数个数 / 软元件与常数格式 / 八进制位 / 输入写守卫 / 栈配平，
