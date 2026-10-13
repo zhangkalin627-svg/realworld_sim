@@ -2,7 +2,7 @@
 运行:  pip install -r requirements-web.txt && python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8000
 物理内核直接复用 rw 包（纯 Python，无 Qt）；桌面版 app.py 不受影响。
 任务模型：POST /api/sim/{module} 提交 → 后台线程跑 → GET /api/job/{id} 轮询 → 结果（文字 + SVG 图）。"""
-import os, time, traceback, uuid
+import os, time, traceback, uuid, math
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +38,8 @@ def _validate_params(mod, params):
                 v = float(v)
             except (TypeError, ValueError):
                 raise HTTPException(400, f"参数「{lab}」需要数字，收到 {v!r}")
+            if not math.isfinite(v):
+                raise HTTPException(400, f"参数「{lab}」需要有限数字")
             if fd.get("min") is not None:
                 v = max(float(fd["min"]), v)
             if fd.get("max") is not None:
