@@ -1,5 +1,11 @@
 # 更新记录
 
+## 2026-10-13 gmsh 后台线程初始化修复
+- 旧版本反馈在当前版本复现：后台 worker 调用 gmsh.initialize() 安装 signal handler，报主线程限定错误。
+- 改为 initialize(interruptible=False)，并以进程内锁序列化本模块的 gmsh 建模过程，避免并发修改其全局模型。
+- tools/test_gmsh_worker.py：gmsh 4.15.2 默认几何的两个 worker 建网格与释放通过。任意过粗网格参数仍可能出现几何网格错误，不把该修复当成所有几何都可网格化。
+- 此为计算内核修复，尚未重做桌面完整点击/图形呈现核验。
+
 ## 2026-10-13 ngspice 批模式控制段结束兼容修复
 - ngspice 36 下控制段 run/write 已生成结果，但控制段结束后批模式仍检查 .print/.plot 并返回 rc=1。按 ngspice 官方控制语言示例，在 write 后显式 quit，让成功控制脚本正常结束。
 - 非零返回码拒绝规则不变；缺模型/非法分析、普通非零、SIGKILL、缺失/截断输出仍须拒绝，不用“有 raw 文件”放行。

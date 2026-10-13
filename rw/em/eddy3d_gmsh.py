@@ -3,8 +3,11 @@ gmsh 是可选依赖（pip 有 x86_64/aarch64 轮子）；不装也能用其它�
 网格用 gmsh OCC 布尔 fragment（空气盒、工件、线圈环共形），物理分组靠"体心落在哪个几何域"分类；
 求解完全复用 eddy3d.py 的 A 公式 Nédélec 棱边单元（子类只换 build()）。
 集肤层靠"工件表面附近加密"（h_skin 默认 3.0 mm ≈ 30 kHz 热态钢 δ≈3 mm；内存够可降到 1.5-2.0 更准）。"""
+import threading
 import numpy as np
 from .eddy3d import TubeInCoil3D, MU0
+
+_GMSH_LOCK = threading.RLock()  # gmsh uses process-global model state
 
 
 def _gmsh():
@@ -27,8 +30,13 @@ class BilletInCoil3D(TubeInCoil3D):
         self.a, self.h_skin, self.h_coil, self.h_air = a, h_skin, h_coil, h_air
 
     def build(self):
+        # GUI/Web workers are not the main interpreter thread; serialize global gmsh state.
+        with _GMSH_LOCK:
+            return self._build_gmsh()
+
+    def _build_gmsh(self):
         gmsh = _gmsh()
-        gmsh.initialize()
+        gmsh.initialize(interruptible=False)
         gmsh.option.setNumber("General.Terminal", 0)   # 静默；异常仍会抛出
         try:
             gmsh.model.add("billet")
