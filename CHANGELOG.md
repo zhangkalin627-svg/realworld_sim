@@ -1,5 +1,11 @@
 # 更新记录
 
+## 2026-10-14 三维装配GUI跨线程回调修复
+- 复现main f6dc4d0离屏w3d0截图SIGSEGV/139，QTextDocument跨线程警告；与卡布独立报告一致。
+- worker结果/错误经页面QObject的queued槽回到GUI主线程，避免Python闭包在worker更新UI；保存截图等待UI完成和线程退出，移除固定800ms猜测。
+- tools/test_world3d_gui_thread.py成功/错误分支通过；validate_gui.py 3/3，w3d0和w3d9截图返回0，实际检查w3d0结果与画面。
+- 本环境PySide6 6.10.2、Linux offscreen；并非所有桌面系统已验。
+
 ## 2026-10-13 gmsh 后台线程初始化修复
 - 旧版本反馈在当前版本复现：后台 worker 调用 gmsh.initialize() 安装 signal handler，报主线程限定错误。
 - 改为 initialize(interruptible=False)，并以进程内锁序列化本模块的 gmsh 建模过程，避免并发修改其全局模型。
