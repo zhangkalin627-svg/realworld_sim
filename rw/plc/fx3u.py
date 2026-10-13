@@ -28,6 +28,37 @@ def dev_offset(d, k):
     return '%s%d' % (t, int(n) + k)
 
 
+CONTACT_OPS = LOAD_OPS | {'AND', 'ANI', 'ANDP', 'ANDF', 'OR', 'ORI', 'ORP', 'ORF'}
+ZERO_OPS = {'ANB', 'ORB', 'MPS', 'MRD', 'MPP', 'RET', 'END'}
+BIT1_OPS = {'SET', 'RST', 'PLS', 'PLF', 'ALT', 'ALTP'}
+WORD1_OPS = {'INC', 'INCP', 'DINC', 'DINCP'}
+
+
+def _check_dev(tok, ln, writable=False):
+    """软元件名合法性：形状 + X/Y 八进制位 + 输入写守卫，报错带原程序行号。"""
+    try:
+        t, n = split_dev(tok)
+    except ValueError:
+        raise ValueError(f"第{ln}行：非法软元件 {tok}")
+    if t in 'XY' and any(c not in '01234567' for c in n):
+        raise ValueError(f"第{ln}行：{t} 元件地址须为八进制（0-7），收到 {tok}")
+    if writable and t == 'X':
+        raise ValueError(f"第{ln}行：不能写输入 {tok}")
+    return t
+
+
+def _check_word_or_const(tok, ln):
+    """字元件 D 或 K/H 常数（含负数十进制）。"""
+    if tok and tok[0] in 'KH':
+        try:
+            int(tok[1:], 16) if tok[0] == 'H' else int(tok[1:])
+        except ValueError:
+            raise ValueError(f"第{ln}行：非法常数 {tok}")
+        return
+    t = _check_dev(tok, ln)
+    if t != 'D':
+        raise ValueError(f"第{ln}行：此处需要字元件 D 或 K/H 常数，收到 {tok}")
+
 class FX3U:
     def __init__(self, il_lines, scan_ms=10):
         self.scan_ms = scan_ms
@@ -50,6 +81,90 @@ class FX3U:
             self.prog_lines.append(n)
         if self.prog[-1][0] != 'END':
             raise ValueError('program must end with END')
+        # ---- 装载期静态校验：操作数个数 / 软元件与常数格式 / 八进制位 / 输入写守卫 / 栈配平，
+        #      一律带原程序行号，不再留到扫描期抛裸 IndexError/ValueError
+        for (op, a), ln in zip(self.prog, self.prog_lines):
+            n = len(a)
+            if op in ZERO_OPS:
+                if n:
+                    raise ValueError(f"第{ln}行：{op} 不接受操作数")
+            elif op in CONTACT_OPS or op == 'STL':
+                if n != 1:
+                    raise ValueError(f"第{ln}行：{op} 需要 1 个操作数，收到 {n} 个")
+                _check_dev(a[0], ln)
+            elif op == 'OUT':
+                if n < 1:
+                    raise ValueError(f"第{ln}行：OUT 缺少目的软元件")
+                t = _check_dev(a[0], ln, writable=True)
+                if t in 'TC':
+                    if n != 2:
+                        raise ValueError(f"第{ln}行：OUT {a[0]} 需要设定值（K/H 常数或 D 元件）")
+                    _check_word_or_const(a[1], ln)
+                elif n != 1:
+                    raise ValueError(f"第{ln}行：OUT {a[0]} 只接受 1 个操作数")
+            elif op in BIT1_OPS:
+                if n != 1:
+                    raise ValueError(f"第{ln}行：{op} 需要 1 个操作数，收到 {n} 个")
+                _check_dev(a[0], ln, writable=True)
+            elif op in WORD1_OPS:
+                if n != 1:
+                    raise ValueError(f"第{ln}行：{op} 需要 1 个操作数，收到 {n} 个")
+                if _check_dev(a[0], ln, writable=True) != 'D':
+                    raise ValueError(f"第{ln}行：{op} 目的须为字元件 D，收到 {a[0]}")
+            elif op == 'MOV':
+                if n != 2:
+                    raise ValueError(f"第{ln}行：MOV 需要 2 个操作数，收到 {n} 个")
+                _check_word_or_const(a[0], ln)
+                if _check_dev(a[1], ln, writable=True) != 'D':
+                    raise ValueError(f"第{ln}行：MOV 目的须为字元件 D，收到 {a[1]}")
+            elif op == 'CMP':
+                if n != 3:
+                    raise ValueError(f"第{ln}行：CMP 需要 3 个操作数，收到 {n} 个")
+                _check_word_or_const(a[0], ln)
+                _check_word_or_const(a[1], ln)
+                _check_dev(a[2], ln, writable=True)
+            elif op == 'ZRST':
+                if n != 2:
+                    raise ValueError(f"第{ln}行：ZRST 需要 2 个操作数，收到 {n} 个")
+                t1 = _check_dev(a[0], ln, writable=True)
+                t2 = _check_dev(a[1], ln, writable=True)
+                if t1 != t2:
+                    raise ValueError(f"第{ln}行：ZRST 起止软元件类型须一致，收到 {a[0]} {a[1]}")
+            elif op == 'SFTL':
+                if n != 4:
+                    raise ValueError(f"第{ln}行：SFTL 需要 4 个操作数，收到 {n} 个")
+                _check_dev(a[0], ln)
+                _check_dev(a[1], ln, writable=True)
+                for k in (2, 3):
+                    if not a[k].startswith('K') or not a[k][1:].isdigit():
+                        raise ValueError(f"第{ln}行：SFTL 位数须为 K 常数，收到 {a[k]}")
+            else:
+                raise ValueError(f"第{ln}行：未知指令 {op}")
+        # ---- 栈配平：ANB/ORB 需要块内先有分支，MPS/MRD/MPP 需要配对（装载期发现，不留给扫描期）
+        blk = 0
+        mps = 0
+        fresh = True
+        for (op, a), ln in zip(self.prog, self.prog_lines):
+            if op in LOAD_OPS:
+                if fresh:
+                    blk = 0
+                    mps = 0
+                    fresh = False
+                else:
+                    blk += 1
+            elif op in ('ANB', 'ORB'):
+                if blk < 1:
+                    raise ValueError(f"第{ln}行：{op} 前没有可组合的触点块（检查 LD 块结构）")
+                blk -= 1
+            elif op == 'MPS':
+                mps += 1
+            elif op in ('MRD', 'MPP'):
+                if mps < 1:
+                    raise ValueError(f"第{ln}行：{op} 栈为空（MPS/MPP 未配平）")
+                if op == 'MPP':
+                    mps -= 1
+            elif op in OUTPUT_OPS or op in ('STL', 'RET'):
+                fresh = True
         self.edge = [False] * len(self.prog)
         self.used_ops = sorted({op for op, _ in self.prog})
 
@@ -128,14 +243,22 @@ class FX3U:
             elif op == 'ORF':
                 v = get(a[0]); acc = acc or ((not v) and self.edge[i]); self.edge[i] = v
             elif op == 'ANB':
+                if not blk:
+                    raise ValueError(f"第{self.prog_lines[i]}行：ANB 块栈为空（检查 LD 块结构）")
                 acc = blk.pop() and acc
             elif op == 'ORB':
+                if not blk:
+                    raise ValueError(f"第{self.prog_lines[i]}行：ORB 块栈为空（检查 LD 块结构）")
                 acc = blk.pop() or acc
             elif op == 'MPS':
                 mps.append(acc)
             elif op == 'MRD':
+                if not mps:
+                    raise ValueError(f"第{self.prog_lines[i]}行：MRD 栈为空（MPS/MPP 未配平）")
                 acc = mps[-1]
             elif op == 'MPP':
+                if not mps:
+                    raise ValueError(f"第{self.prog_lines[i]}行：MPP 栈为空（MPS/MPP 未配平）")
                 acc = mps.pop()
             elif op == 'STL':
                 cur_stl = a[0]
@@ -252,7 +375,8 @@ class FX3U:
         elif op == 'ZRST':
             if acc:
                 t1, n1 = split_dev(a[0]); t2, n2 = split_dev(a[1])
-                assert t1 == t2
+                if t1 != t2:
+                    raise ValueError(f"第{self.prog_lines[i]}行：ZRST 起止软元件类型须一致")
                 base = 8 if t1 in 'XY' else 10
                 for k in range(int(n2, base) - int(n1, base) + 1):
                     dd = dev_offset(a[0], k)

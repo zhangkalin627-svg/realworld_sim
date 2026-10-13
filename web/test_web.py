@@ -171,6 +171,19 @@ assert j["status"] == "error" and "END" in j["error"] and "Traceback" not in j["
 # 豆包反馈：未知指令要带行号
 j = run_wait("plc", {"program": "LD X000\nFOO X001\nEND"})
 assert j["status"] == "error" and "第2行" in j["error"] and "FOO" in j["error"], j.get("error", "?")[:200]
+# 豆包 P2-2/P3-1 复测（v0.30.2）：畸形输入装载期带行号报错，不再留裸 IndexError/ValueError 到扫描期
+j = run_wait("plc", {"program": "LD\nOUT Y000\nEND"})
+assert j["status"] == "error" and "第1行" in j["error"] and "操作数" in j["error"], j.get("error", "?")[:200]
+j = run_wait("plc", {"program": "LD X000\nMOV K5 X000\nEND"})
+assert j["status"] == "error" and "不能写输入" in j["error"], j.get("error", "?")[:200]
+j = run_wait("plc", {"program": "LD X000\nOUT Y080\nEND"})
+assert j["status"] == "error" and "八进制" in j["error"], j.get("error", "?")[:200]
+j = run_wait("plc", {"program": "LD X000\nOUT T0\nEND"})
+assert j["status"] == "error" and "设定值" in j["error"], j.get("error", "?")[:200]
+j = run_wait("plc", {"program": "LD X000\nMPP\nOUT Y000\nEND"})
+assert j["status"] == "error" and "配平" in j["error"], j.get("error", "?")[:200]
+j = run_wait("plc", {"program": "LD X000\nMOV Kabc D0\nEND"})
+assert j["status"] == "error" and "非法常数" in j["error"], j.get("error", "?")[:200]
 print(f"[web-j] 两封反馈修复回归 OK ({time.time()-t0:.0f}s): NaN文本/400校验/越界收口/不可达温度快速失败/错误不泄堆栈")
 
 # [web-k] 电路模块：无 ngspice 的服务器必须给友好报错（沙箱即此情形）
