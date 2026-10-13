@@ -175,12 +175,27 @@ class World3DPage(QtWidgets.QWidget):
             def run(self):
                 try: self.done.emit(job())
                 except Exception: self.failed.emit(_tb.format_exc())
-        self._th3 = QtCore.QThread(); self._j3 = _J()
+        if getattr(self, "_th3", None) is not None and self._th3.isRunning():
+            raise RuntimeError("仿真仍在运行")
+        self._on_done3 = on_done
+        self._th3 = QtCore.QThread(self); self._j3 = _J()
         self._j3.moveToThread(self._th3)
         self._th3.started.connect(self._j3.run)
-        self._j3.done.connect(on_done); self._j3.failed.connect(self._sim_err)
+        # A Python closure is not a QObject receiver: use this GUI-thread slot.
+        self._j3.done.connect(self._dispatch_done, QtCore.Qt.QueuedConnection)
+        self._j3.failed.connect(self._dispatch_error, QtCore.Qt.QueuedConnection)
         self._j3.done.connect(self._th3.quit); self._j3.failed.connect(self._th3.quit)
+        self._j3.done.connect(self._j3.deleteLater)
+        self._j3.failed.connect(self._j3.deleteLater)
         self._th3.start()
+
+    @QtCore.Slot(object)
+    def _dispatch_done(self, result):
+        self._on_done3(result)
+
+    @QtCore.Slot(str)
+    def _dispatch_error(self, tb):
+        self._sim_err(tb)
 
     def _sim_err(self, tb):
         QtWidgets.QApplication.restoreOverrideCursor()

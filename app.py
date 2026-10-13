@@ -323,13 +323,23 @@ def main():
                 print(f"提示: w3d{sub} 不存在，改截 w3d0", file=sys.stderr)
                 sub = 0
             pg.preset.setCurrentIndex({0: 0, 1: 2, 2: 6, 3: 3, 4: 5}[sub]); pg.load_preset(pg.preset.currentIndex())
-            if sub != 2:
-                pg.run()
+            def save_w3d():
                 if sub in (1, 3):
                     pg.slider.setValue(int(pg.slider.maximum() * 0.45))
                 if sub == 4:
                     pg.tabs.setCurrentIndex(1)
-            QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
+                QtCore.QTimer.singleShot(100, lambda: (w.grab().save(out), app.quit()))
+            if sub != 2:
+                pg.run()
+                poll = QtCore.QTimer(w)
+                def ready_w3d():
+                    # Completion updates and worker shutdown must both finish.
+                    if pg.btn.isEnabled() and not pg._th3.isRunning():
+                        poll.stop(); save_w3d()
+                poll.timeout.connect(ready_w3d)
+                poll.start(50)
+            else:
+                save_w3d()
         elif which == "struct":
             w.top.setCurrentWidget(w.st_tabs); w.st_tabs.setCurrentIndex(0)
             QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
