@@ -19,7 +19,7 @@ def _T(pos_mm, quat_wxyz):
 
 def run_world3d(params, progress):
     from rw.world3d import presets
-    from rw.world3d.physics import simulate, check
+    from rw.world3d.physics import simulate, check, float_check
     name = params.get("preset") or next(iter(presets.PRESETS))
     if name not in presets.PRESETS:
         raise ValueError(f"未知预设 {name}")
@@ -29,6 +29,7 @@ def run_world3d(params, progress):
     res = simulate(scene, tmax=tmax, fps=15)
     progress(0.7)
     chk = check(res)
+    buoyancy = float_check(scene) if scene.fluid else []
     progress(0.85)
 
     meshes = {}
@@ -98,6 +99,11 @@ def run_world3d(params, progress):
     fl = chk.get("floor")
     if fl:
         lines.append(f"· 地面总压力 {fl['total_N']:.0f} N（{fl['n']} 个接触点）")
+    if buoyancy:
+        lines.append("· 浮沉为静态阿基米德判断，非液体动力学；动画运动不表示水中漂浮轨迹")
+        for f in buoyancy:
+            conclusion = f"浮，吃水约 {f['draft']*100:.0f}%" if f["floats"] else f"沉，净重 {f['net_N']:.1f} N"
+            lines.append(f"· {f['name']}：{conclusion}（零件密度 {f['rho_part']:.0f} / 液体密度 {f['rho_fluid']:.0f} kg/m³）")
     warnings = [f"梁 {b['name']} 断裂！（GUI ⑨页可演示断裂后果）" for b in chk["broken"]] + \
                [f"梁 {b['name']} 屈服（塑性变形）" for b in chk["yielded"]]
     viewer = {"name": scene.name,
@@ -106,4 +112,4 @@ def run_world3d(params, progress):
               "meshes": meshes, "poses": poses,
               "times": [round(float(t), 3) for t in res.times], "status": status}
     progress(1.0)
-    return _clean({"lines": lines, "warnings": warnings, "plots": [], "viewer": viewer, "raw": {}})
+    return _clean({"lines": lines, "warnings": warnings, "plots": [], "viewer": viewer, "raw": {"buoyancy": buoyancy}})
