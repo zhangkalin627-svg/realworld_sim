@@ -1,7 +1,8 @@
 """Web 版冒烟测试 (v0.16)：python3 web/test_web.py
 首页可达、模块清单、材料库即查、感应淬火小算例端到端跑通（缩短加热/淬火时间，约 10–30 s）。"""
-import sys, os, time
+import sys, os, time, faulthandler
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+faulthandler.dump_traceback_later(570, exit=True)   # 套件总看门狗：挂死时先倒堆栈再退出
 os.environ["RW_JOBS_DB"] = os.path.join("/tmp", f"rw_test_jobs_{os.getpid()}.db")   # v0.22 测试库隔离
 if os.path.exists(os.environ["RW_JOBS_DB"]):
     os.remove(os.environ["RW_JOBS_DB"])
@@ -20,12 +21,19 @@ assert {"induction", "materials", "world3d", "plc"} <= keys, f"模块清单缺�
 assert any(f.get("name") == "freq" for f in mods[0]["fields"]), "感应淬火表单缺字段"
 print(f"[web-b] 模块清单 {sorted(keys)}，表单 schema 完整")
 
+def _poll(jid):
+    faulthandler.dump_traceback_later(45)           # 单次 GET 看门狗：卡住 45s 倒堆栈（不退出）
+    try:
+        return c.get(f"/api/job/{jid}").json()
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
 def run_wait(key, params, timeout=240):
     jid = c.post(f"/api/sim/{key}", json={"params": params}).json()["job"]
     t0 = time.time()
     while time.time() - t0 < timeout:
-        j = c.get(f"/api/job/{jid}").json()
-        if j["status"] != "running":
+        j = _poll(jid)
+        if j["status"] not in ("running", "queued"):
             return j
         time.sleep(1.0)
     raise TimeoutError(key)
@@ -33,8 +41,8 @@ def run_wait(key, params, timeout=240):
 def run_wait_id(jid, timeout=240):
     t0 = time.time()
     while time.time() - t0 < timeout:
-        j = c.get(f"/api/job/{jid}").json()
-        if j["status"] != "running":
+        j = _poll(jid)
+        if j["status"] not in ("running", "queued"):
             return j
         time.sleep(1.0)
     raise TimeoutError(jid)

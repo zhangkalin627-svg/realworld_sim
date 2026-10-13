@@ -29,6 +29,10 @@ class JobStore:
                        time.time(), time.time()))
             c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)")
 
+    def set_running(self, jid):
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE jobs SET status='running', updated=? WHERE id=?", (time.time(), jid))
+
     def set_progress(self, jid, frac):
         with self._lock, self._conn() as c:
             c.execute("UPDATE jobs SET progress=?, updated=? WHERE id=?", (round(float(frac), 3), time.time(), jid))
@@ -69,8 +73,8 @@ class JobStore:
     def mark_interrupted(self):
         """服务器重启时调用：running → interrupted（结果没有，参数保留）。返回受影响任务数。"""
         with self._lock, self._conn() as c:
-            n = c.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0]
-            c.execute("UPDATE jobs SET status='interrupted', error=?, updated=? WHERE status='running'",
+            n = c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('running','queued')").fetchone()[0]
+            c.execute("UPDATE jobs SET status='interrupted', error=?, updated=? WHERE status IN ('running','queued')",
                       ("服务器重启，任务中断；参数已保留，可重新提交（感应淬火任务可从断点续算）", time.time()))
         return n
 
