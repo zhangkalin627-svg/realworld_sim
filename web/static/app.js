@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-let MODULES = [], cur = null, pollTimer = null;
+let MODULES = [], cur = null, pollTimer = null, viewEpoch = 0;
 
 async function boot() {
   MODULES = await (await fetch('/api/modules')).json();
@@ -20,6 +20,10 @@ async function boot() {
 
 function select(i) {
   cur = MODULES[i];
+  viewEpoch++; clearTimeout(pollTimer);
+  clearResult();
+  $('#runbtn').disabled = false;
+  $('#status').textContent = `待运行 · ${cur.name}`;
   document.querySelectorAll('nav button').forEach((b, j) => b.classList.toggle('on', i === j));
   $('#mtitle').textContent = cur.name;
   $('#mdesc').textContent = cur.desc || '';
@@ -56,7 +60,14 @@ function select(i) {
   });
 }
 
+function clearResult() {
+  ['#lines', '#warns', '#plots'].forEach(s => { $(s).innerHTML = ''; $(s).textContent = ''; });
+  $('#bar').style.display = 'none';
+  $('#barfill').style.width = '0%';
+}
+
 $('#runbtn').onclick = async () => {
+  const moduleKey = cur.key, epoch = viewEpoch;
   const fd = new FormData($('#pform'));
   const params = {};
   cur.fields.forEach(x => {
@@ -69,10 +80,11 @@ $('#runbtn').onclick = async () => {
   $('#status').textContent = '仿真进行中 …';
   $('#lines').innerHTML = ''; $('#warns').innerHTML = ''; $('#plots').innerHTML = '';
   $('#bar').style.display = 'block';
-  const r = await (await fetch(`/api/sim/${cur.key}`, {
+  const r = await (await fetch(`/api/sim/${moduleKey}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({params})
   })).json();
-  poll(r.job);
+  if (epoch === viewEpoch && cur.key === moduleKey) poll(r.job, epoch);
+  else loadJobs();
 };
 
 function esc(s) {
@@ -80,6 +92,9 @@ function esc(s) {
 }
 
 function renderResult(j) {
+  if (!cur || j.module !== cur.key) return;
+  clearResult();
+  const moduleName = cur.name;
   $('#runbtn').disabled = false;
   $('#bar').style.display = 'none';
   if (j.status === 'error' || j.status === 'interrupted') {
@@ -89,11 +104,13 @@ function renderResult(j) {
       b.textContent = '⏩ 从断点续算';
       b.style.marginTop = '8px';
       b.onclick = async () => {
+        const epoch = viewEpoch;
         b.disabled = true; b.textContent = '续算提交中 …';
         const r = await (await fetch(`/api/sim/${j.module}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({params: {...j.params, resume_from: j.id}})
         })).json();
+        if (epoch !== viewEpoch || cur.key !== j.module) { loadJobs(); return; }
         $('#status').textContent = '仿真进行中（断点续算）…';
         $('#bar').style.display = 'block';
         poll(r.job);
@@ -104,7 +121,7 @@ function renderResult(j) {
     return;
   }
   const r = j.result;
-  $('#status').textContent = '完成';
+  $('#status').textContent = `完成 · ${moduleName}`;
   $('#lines').textContent = r.lines.join('\n');
   $('#warns').innerHTML = (r.warnings || []).map(w => `<div>⚠ ${esc(w)}</div>`).join('');
   $('#plots').innerHTML = (r.plots || []).map(p => p.svg).join('');
@@ -117,12 +134,13 @@ function renderResult(j) {
   }
 }
 
-function poll(jid) {
+function poll(jid, epoch = viewEpoch) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
     const j = await (await fetch(`/api/job/${jid}`)).json();
+    if (epoch !== viewEpoch || j.module !== cur.key) return;
     $('#barfill').style.width = `${(j.progress * 100).toFixed(0)}%`;
-    if (j.status === 'running' || j.status === 'queued') return poll(jid);
+    if (j.status === 'running' || j.status === 'queued') return poll(jid, epoch);
     renderResult(j); loadJobs();
   }, 700);
 }
@@ -139,8 +157,19 @@ async function loadJobs() {
     return `<div class="jobrow" data-jid="${j.id}">${icon} ${esc(names[j.module] || j.module)} <span class="muted">${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span></div>`;
   }).join('');
   host.querySelectorAll('.jobrow').forEach(el => el.onclick = async () => {
+    const epoch = ++viewEpoch; clearTimeout(pollTimer);
     const j = await (await fetch(`/api/job/${el.dataset.jid}`)).json();
-    if (j.status === 'running' || j.status === 'queued') { $('#status').textContent = '该任务还在运行'; return; }
+    if (epoch !== viewEpoch) return;
+    const mi = MODULES.findIndex(m => m.key === j.module);
+    if (mi < 0) return;
+    select(mi);
+    // Keep history parameters beside their result, not unrelated defaults.
+    for (const [name, value] of Object.entries(j.params || {})) {
+      const input = $('#pform').elements.namedItem(name);
+      if (!input) continue;
+      if (input.type === 'checkbox') input.checked = !!value; else input.value = value;
+    }
+    if (j.status === 'running' || j.status === 'queued') { $('#status').textContent = `运行中 · ${cur.name}`; $('#runbtn').disabled = true; $('#bar').style.display = 'block'; poll(j.id); return; }
     $('#lines').innerHTML = ''; $('#warns').innerHTML = ''; $('#plots').innerHTML = '';
     renderResult(j);
   });
