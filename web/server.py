@@ -72,14 +72,28 @@ def start_sim(key: str, req: RunReq):
     if mod is None:
         raise HTTPException(404, "未知模块")
     params = dict(req.params)
-    resume_from = params.pop("resume_from", None)      # v0.25 断点续算：从某个中断任务的检查点接着算
+    resume_from = params.pop("resume_from", None)
     resume_state = None
-    if resume_from and mod.get("ckpt"):
-        old_job = STORE.get(str(resume_from))
-        ck = STORE.get_checkpoint(str(resume_from))
-        if old_job and ck and old_job["module"] == key and old_job["status"] in ("interrupted", "error"):
-            import json as _json
+    if resume_from is not None:
+        if not isinstance(resume_from, str) or not resume_from.strip():
+            raise HTTPException(400, "resume_from需要非空任务ID")
+        if not mod.get("ckpt"):
+            raise HTTPException(400, "当前模块不支持断点续算")
+        old_job = STORE.get(resume_from)
+        if old_job is None:
+            raise HTTPException(404, "续算来源任务不存在")
+        if old_job["module"] != key or old_job["status"] not in ("interrupted", "error"):
+            raise HTTPException(409, "续算来源模块或任务状态不匹配")
+        ck = STORE.get_checkpoint(resume_from)
+        if not ck:
+            raise HTTPException(409, "续算来源没有检查点")
+        import json as _json
+        try:
             resume_state = _json.loads(ck)
+        except (TypeError, ValueError):
+            raise HTTPException(409, "续算检查点JSON损坏") from None
+        if not isinstance(resume_state, dict) or not resume_state:
+            raise HTTPException(409, "续算检查点必须是非空对象")
     params = _validate_params(mod, params)
     jid = uuid.uuid4().hex[:12]
     STORE.create(jid, key, params)
