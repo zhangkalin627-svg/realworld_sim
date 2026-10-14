@@ -236,13 +236,13 @@ class FX3U:
             elif op == 'ANDF':
                 v = get(a[0]); acc = acc and (not v) and self.edge[i]; self.edge[i] = v
             elif op == 'OR':
-                acc = acc or get(a[0])
+                acc = acc or (gate and get(a[0]))
             elif op == 'ORI':
-                acc = acc or not get(a[0])
+                acc = acc or (gate and not get(a[0]))
             elif op == 'ORP':
-                v = get(a[0]); acc = acc or (v and not self.edge[i]); self.edge[i] = v
+                v = get(a[0]); acc = acc or (gate and v and not self.edge[i]); self.edge[i] = v
             elif op == 'ORF':
-                v = get(a[0]); acc = acc or ((not v) and self.edge[i]); self.edge[i] = v
+                v = get(a[0]); acc = acc or (gate and (not v) and self.edge[i]); self.edge[i] = v
             elif op == 'ANB':
                 if not blk:
                     raise ValueError(f"第{self.prog_lines[i]}行：ANB 块栈为空（检查 LD 块结构）")
