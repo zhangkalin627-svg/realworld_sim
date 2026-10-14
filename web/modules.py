@@ -301,7 +301,7 @@ def run_circuit(params, progress):
     progress(0.1)
     if custom:
         c = kicad.import_spice(None, text=custom)
-        w = c.tran(step=_num(params, "tstep", 1e-5), stop=_num(params, "tstop", 1e-2))
+        w = c.tran(step=float(params.get("tstep", 1e-5)), stop=float(params.get("tstop", 1e-2)))
         name, theory, chans, wa = "自定义网表", "", (w.nets() or [])[:4], None
     else:
         ex = EX.get(params.get("example") or "rc")
