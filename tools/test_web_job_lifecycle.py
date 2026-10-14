@@ -23,8 +23,8 @@ class LifecycleTests(unittest.TestCase):
     def seed(self,jid='old',module='test-life',checkpoint='{}',status='interrupted'):
         self.store.create(jid,module,{})
         if checkpoint is not None:self.store.set_checkpoint(jid,checkpoint)
-        self.store.set_error(jid,'stopped')
         if status=='done':self.store.set_done(jid,{'old':True})
+        else:self.store.set_error(jid,'stopped')
     def post(self,params):
         return self.client.post('/api/sim/test-life',json={'params':params})
     def test_bad_resume_does_not_silently_start_fresh(self):
@@ -73,6 +73,17 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'指纹'):
                 run_induction({'mode':'power'},lambda f:None,resume={'params_fingerprint':'wrong'})
             build.assert_not_called()
+
+    def test_terminal_states_cannot_be_rewritten_or_revived(self):
+        self.store.create('terminal','test-life',{})
+        self.store.set_done('terminal',{'final':True})
+        for operation in (lambda:self.store.set_running('terminal'),lambda:self.store.set_error('terminal','late'),lambda:self.store.set_done('terminal',{'late':True})):
+            with self.assertRaises(ValueError):operation()
+        self.assertEqual(self.store.get('terminal')['status'],'done')
+        self.assertEqual(self.store.get('terminal')['result'],{'final':True})
+    def test_missing_row_updates_fail_loudly(self):
+        for operation in (lambda:self.store.set_running('missing'),lambda:self.store.set_done('missing',{}),lambda:self.store.set_error('missing','lost')):
+            with self.assertRaises(ValueError):operation()
 
 if __name__=='__main__':
     try:unittest.main()

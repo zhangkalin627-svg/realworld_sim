@@ -31,7 +31,9 @@ class JobStore:
 
     def set_running(self, jid):
         with self._lock, self._conn() as c:
-            c.execute("UPDATE jobs SET status='running', updated=? WHERE id=?", (time.time(), jid))
+            changed = c.execute("UPDATE jobs SET status='running', result=NULL, error=NULL, updated=? WHERE id=? AND status IN ('running','queued')", (time.time(), jid)).rowcount
+            if changed != 1:
+                raise ValueError("任务不存在或已终止，不能重新运行")
 
     def set_progress(self, jid, frac):
         with self._lock, self._conn() as c:
@@ -39,12 +41,16 @@ class JobStore:
 
     def set_done(self, jid, result):
         with self._lock, self._conn() as c:
-            c.execute("UPDATE jobs SET status='done', progress=1.0, result=?, updated=? WHERE id=?",
-                      (json.dumps(result, ensure_ascii=False), time.time(), jid))
+            changed = c.execute("UPDATE jobs SET status='done', progress=1.0, result=?, error=NULL, updated=? WHERE id=? AND status IN ('running','queued')",
+                                (json.dumps(result, ensure_ascii=False), time.time(), jid)).rowcount
+            if changed != 1:
+                raise ValueError("任务不存在或已终止，不能写入成功结果")
 
     def set_error(self, jid, err):
         with self._lock, self._conn() as c:
-            c.execute("UPDATE jobs SET status='error', error=?, updated=? WHERE id=?", (err, time.time(), jid))
+            changed = c.execute("UPDATE jobs SET status='error', result=NULL, error=?, updated=? WHERE id=? AND status IN ('running','queued')", (err, time.time(), jid)).rowcount
+            if changed != 1:
+                raise ValueError("任务不存在或已终止，不能写入错误结果")
 
     def set_checkpoint(self, jid, state_json):
         with self._lock, self._conn() as c:
