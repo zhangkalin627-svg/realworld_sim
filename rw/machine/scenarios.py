@@ -177,7 +177,7 @@ def short_transients(sp, s_pre, Vbus):
         # 仍超额定 10%——快速关断无法完全压住（关断后电感储能继续灌入电容），残差如实进 verdict
         vc_peak_rated = getattr(getattr(sp, "cool", None), "Vc_rated", 2000.0) * math.sqrt(2)  # v0.30.1：属性名是 cool 不是 cs（Pally 审查发现，原先静默落到默认值）
         res[prot] = ST.fault_transient(L, sp.C_res, Rc + Rw, Vbus, f, L_short=1e-9 + 0.0 * L, R_short=Rw, prot=prot,
-                                       I_trip=sp.I_trip_pk, t_end=1.8e-3, dt=25e-9,
+                                       I_trip=sp.I_trip_pk, t_d=2e-6, t_end=1.8e-3, dt=25e-9,
                                        V_trip=(0.95 * vc_peak_rated if prot == "hw" else None))
     return res
 
