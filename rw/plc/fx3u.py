@@ -223,9 +223,9 @@ class FX3U:
                 elif op == 'LDI':
                     acc = gate and not v
                 elif op == 'LDP':
-                    acc = v and not self.edge[i]; self.edge[i] = v
+                    acc = gate and v and not self.edge[i]; self.edge[i] = v
                 else:
-                    acc = (not v) and self.edge[i]; self.edge[i] = v
+                    acc = gate and (not v) and self.edge[i]; self.edge[i] = v
                 prev_out = False
                 continue
             if op == 'AND':
