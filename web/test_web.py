@@ -222,11 +222,17 @@ assert j2["status"] == "done", j2.get("error", "?")[:150]
 res2 = j2["result"]["raw"]
 assert abs(res2["case_depth_mm"] - full["case_depth_mm"]) < 0.02, (res2["case_depth_mm"], full["case_depth_mm"])
 assert abs(res2["HRC_surface"] - full["HRC_surface"]) < 0.2
-# 参数变了（功率不同）指纹不符 → 忽略旧检查点从头跑，也必须正常完成
+# 参数变了（功率不同）指纹不符 → 明确拒绝续算，不得沿用旧检查点（v0.26 起）
 r3 = c.post("/api/sim/induction", json={"params": {"mode": "power", "power_kw": 12, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5, "resume_from": j["id"]}})
+assert r3.status_code == 200, r3.text[:200]
 j3 = run_wait_id(r3.json()["job"], timeout=120)
-assert j3["status"] == "done", j3.get("error", "?")[:150]
-print(f"[web-l] 断点续算 OK ({time.time()-t1:.0f}s): 检查点落盘/中断后续算终态一致(硬化层差<0.02mm)/参数变更加头重跑")
+assert j3["status"] == "error" and "指纹" in j3.get("error", ""), (j3["status"], j3.get("error", "?")[:150])
+# 同参数全新任务（不带 resume_from）则必须正常完成
+r4 = c.post("/api/sim/induction", json={"params": {"mode": "power", "power_kw": 12, "t_heat": 1.5, "t_quench": 1.0, "t_air": 0.5}})
+assert r4.status_code == 200, r4.text[:200]
+j4 = run_wait_id(r4.json()["job"], timeout=120)
+assert j4["status"] == "done", j4.get("error", "?")[:150]
+print(f"[web-l] 断点续算 OK ({time.time()-t1:.0f}s): 检查点落盘/中断后续算终态一致(硬化层差<0.02mm)/指纹不符明确拒绝续算/新参数新任务正常完成")
 
 
 # [web-m] 加速档：fast 模式跑通且关键指标与精确档一致
