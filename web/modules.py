@@ -9,6 +9,17 @@ import matplotlib
 matplotlib.use("Agg")                    # 服务器无显示环境
 import matplotlib.pyplot as plt
 
+# Web 绘图路径注册中文字库（与 rw/viz.py 同口径；kabu499 发现只跑电路模块时缺字）
+import os as _os
+_fp = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "fonts", "NotoSansSC-Regular.otf")
+if _os.path.exists(_fp):
+    matplotlib.font_manager.fontManager.addfont(_fp)
+for _f in ("Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", "WenQuanYi Zen Hei", "Microsoft YaHei", "SimHei"):
+    if any(_f in f.name for f in matplotlib.font_manager.fontManager.ttflist):
+        plt.rcParams["font.sans-serif"] = [_f, "DejaVu Sans"]
+        break
+plt.rcParams["axes.unicode_minus"] = False
+
 
 def _clean(o):
     """递归清理: 非有限浮点(NaN/Inf, 如未达温的 t8/5) 转 None，保证 JSON 可序列化。"""
