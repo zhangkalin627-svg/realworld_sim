@@ -8,6 +8,10 @@ ALT/ALTP/OUT T/OUT C/M8000/M8002/STL-RET）。手册文档号/页码本环境联
 退出码：全部断言通过=0；任一失败=1 并打印 [FAIL]。
 """
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import sys
 from rw.plc.fx3u import FX3U
 
 PASS = 0
