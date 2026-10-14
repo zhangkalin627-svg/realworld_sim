@@ -27,7 +27,7 @@ class JobStore:
             c.execute("INSERT INTO jobs(id, module, params, status, progress, result, error, created, updated) VALUES(?,?,?,?,?,?,?,?,?)",
                       (jid, module, json.dumps(params, ensure_ascii=False), "running", 0.0, None, None,
                        time.time(), time.time()))
-            c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)")
+            c.execute("DELETE FROM jobs WHERE status NOT IN ('running','queued') AND id NOT IN (SELECT id FROM jobs WHERE status NOT IN ('running','queued') ORDER BY created DESC LIMIT 200)")
 
     def set_running(self, jid):
         with self._lock, self._conn() as c:
