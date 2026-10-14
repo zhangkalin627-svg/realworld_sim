@@ -121,7 +121,11 @@ def start_sim(key: str, req: RunReq):
             STORE.set_error(jid, f"{type(e).__name__}: {e}")
             print(f"[job {jid}] error t={time.strftime('%H:%M:%S')}", flush=True)
 
-    _pool.submit(job)
+    try:
+        _pool.submit(job)
+    except RuntimeError:
+        STORE.set_error(jid, "任务执行器不可用，请稍后重试")
+        raise HTTPException(503, "任务执行器不可用，请稍后重试") from None
     return {"job": jid}
 
 

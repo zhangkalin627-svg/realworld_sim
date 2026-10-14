@@ -59,6 +59,21 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(response.status_code,400,response.text)
         submit.assert_not_called()
 
+    def test_rejected_executor_is_recorded_as_error(self):
+        with patch.object(server._pool,'submit',side_effect=RuntimeError('executor closed')):
+            response=self.post({})
+        self.assertEqual(response.status_code,503,response.text)
+        jobs=self.store.recent()
+        self.assertEqual(len(jobs),1)
+        self.assertEqual(jobs[0]['status'],'error')
+
+    def test_induction_bad_fingerprint_rejected_before_build(self):
+        from web.modules import run_induction
+        with patch('rw.induction.InductionQuenchSim',side_effect=AssertionError('built before fingerprint check')) as build:
+            with self.assertRaisesRegex(ValueError,'指纹'):
+                run_induction({'mode':'power'},lambda f:None,resume={'params_fingerprint':'wrong'})
+            build.assert_not_called()
+
 if __name__=='__main__':
     try:unittest.main()
     finally:server._pool.shutdown(wait=True);_tmp.cleanup()
