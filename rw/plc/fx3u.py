@@ -68,7 +68,6 @@ class FX3U:
         self.cval = {}      # counter value
         self.cprev = {}     # counter coil previous
         self.t_ms = 0
-        self._tkeep = {}
         self.first = True
         self.prog = []
         self.prog_lines = []   # 每条指令在原程序里的行号（1 起），报错定位用
@@ -308,15 +307,18 @@ class FX3U:
         if op == 'OUT':
             t = d[0]
             if t == 'T':
+                n = int(d[1:])
+                retentive = 246 <= n <= 255          # 积算型：断开保持累计值
                 if acc:
                     self.tval[d] = self.tval.get(d, 0) + self.scan_ms
-                else:
+                elif not retentive:
                     self.tval[d] = 0
-                n = int(d[1:])
                 unit = 10 if 200 <= n <= 245 else (1 if 246 <= n <= 249 else 100)
-                if 246 <= n <= 255 and not acc:      # 积算型：断开保持
-                    self.tval[d] = self.tval.get(d, 0) if acc else self._tkeep.get(d, 0)
-                self.bits[d] = acc and self.tval[d] >= self.val(a[1]) * unit
+                # 积算型触点达预置后锁存，须 RST 复位；非积算触点随 acc 断开回落
+                if retentive:
+                    self.bits[d] = self.tval[d] >= self.val(a[1]) * unit
+                else:
+                    self.bits[d] = acc and self.tval[d] >= self.val(a[1]) * unit
             elif t == 'C':
                 prev = self.cprev.get(d, False)
                 if acc and not prev:
