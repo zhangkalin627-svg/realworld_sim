@@ -60,6 +60,8 @@ class BilletInCoil3D(TubeInCoil3D):
             # 体分类：fragment 映射表——fmap[1]=工件工具体，fmap[2]=线圈工具体，其余为空气（确定性，不靠体心猜）
             wp_vol = [t for d, t in fmap[1] if d == 3]
             coil_vol = [t for d, t in fmap[2] if d == 3]
+            if set(wp_vol) & set(coil_vol):
+                raise ValueError("工件与线圈实体重叠，不能将同一体积标为两种材料；请减小工件或偏心量/增大线圈内径")
             tagged = set(wp_vol) | set(coil_vol)
             air_vol = [t for d, t in gmsh.model.getEntities(3) if t not in tagged]
             assert wp_vol and coil_vol, "工件/线圈体分类失败"
