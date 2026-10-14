@@ -64,6 +64,9 @@ def induction_geometry(params):
 
 def run_induction(params, progress, checkpoint=None, resume=None):
     """感应淬火：参数对齐桌面版①页。慢任务（非线性约 ×3），由任务线程跑。支持断点续算 (v0.25)。"""
+    if resume is not None:
+        if not isinstance(resume, dict) or resume.get("params_fingerprint") != _ind_fingerprint(params):
+            raise ValueError("续算参数指纹不匹配，请使用原参数或明确新建任务")
     from rw.induction import InductionQuenchSim, find_power
     f = lambda k, d: float(params.get(k, d))
     g = induction_geometry(params)
@@ -95,10 +98,6 @@ def run_induction(params, progress, checkpoint=None, resume=None):
     else:
         kw["power_kw"] = f("power_kw", 6.0)
     sim = InductionQuenchSim(**kw)
-    if resume and resume.get("params_fingerprint") == _ind_fingerprint(params):
-        pass  # 指纹一致才续算（双保险，服务器侧已按模块+状态过滤）
-    elif resume:
-        resume = None  # 指纹不符：从头跑，不用旧状态
     r = _clean(sim.run(progress=lambda f: progress(0.05 + 0.95 * f),
                        checkpoint=checkpoint and (lambda st: checkpoint({**st, "params_fingerprint": _ind_fingerprint(params)})),
                        resume=resume))
