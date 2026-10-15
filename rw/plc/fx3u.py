@@ -44,6 +44,13 @@ def _check_dev(tok, ln, writable=False):
         raise ValueError(f"第{ln}行：{t} 元件地址须为八进制（0-7），收到 {tok}")
     if writable and t == 'X':
         raise ValueError(f"第{ln}行：不能写输入 {tok}")
+    # FX3U 型号范围守卫：T/C/D 编号越界即拒（dict 存储不会自动报错，真机编程工具直接拒）
+    if t == 'T' and not 0 <= int(n) <= 255:
+        raise ValueError(f"第{ln}行：T 元件编号须在 T0-T255，收到 {tok}")
+    if t == 'C' and not 0 <= int(n) <= 255:
+        raise ValueError(f"第{ln}行：C 元件编号须在 C0-C255，收到 {tok}")
+    if t == 'D' and not 0 <= int(n) <= 8511:
+        raise ValueError(f"第{ln}行：D 元件编号须在 D0-D8511，收到 {tok}")
     return t
 
 
@@ -101,6 +108,9 @@ class FX3U:
                     if n != 2:
                         raise ValueError(f"第{ln}行：OUT {a[0]} 需要设定值（K/H 常数或 D 元件）")
                     _check_word_or_const(a[1], ln)
+                    # 预置值语境拒绝负 K：负预置会让 tval>=预置 恒真、定时器/计数器首扫描即动作
+                    if a[1].startswith('K') and int(a[1][1:]) < 0:
+                        raise ValueError(f"第{ln}行：OUT {a[0]} 预置值不能为负，收到 {a[1]}")
                 elif n != 1:
                     raise ValueError(f"第{ln}行：OUT {a[0]} 只接受 1 个操作数")
             elif op in BIT1_OPS:
