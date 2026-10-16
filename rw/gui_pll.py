@@ -182,6 +182,7 @@ class PLLDemoPage(QtWidgets.QWidget):
             "<br>".join(f'<span style="color:{COLOR[ok]}"><b>[{"PASS" if ok else "FAIL"}]</b> {_h.escape(t)}</span>'
                         for ok, t in res["verdicts"]) +
             "<br><br><span style='color:#555'>行为级模型仿真结果；验收脚本 validate_pll.py 同一口径。指令级 AVR 固件在环互证见 validate_fw_pll.py（v0.32）。</span>")
+        self._pause()
         self._setup_plot(key, res)
         self.replay()
 
@@ -223,6 +224,8 @@ class PLLDemoPage(QtWidgets.QWidget):
         self._draw()
 
     def _draw(self):
+        if self.res is None or not getattr(self, "_t", None):
+            return
         n = bisect.bisect_right(self._t, self.tr)
         self.lf.set_data(self._t[:n], self._f[:n])
         self.lf0.set_data(self._t[:n], self._f0[:n])
@@ -237,7 +240,7 @@ class PLLDemoPage(QtWidgets.QWidget):
         self.slider.blockSignals(True)
         self.slider.setValue(int(self.tr / self._t[-1] * 1000))
         self.slider.blockSignals(False)
-        self.cv.draw_idle()
+        self.cv.draw()  # 同步画：延迟绘制会撞上一帧未完的 backing store
 
     # ---------------------------------------------------------- 播放控制
     def toggle(self):

@@ -36,6 +36,7 @@ class QuenchReplay(QtWidgets.QWidget):
 
     # ---------------------------------------------------------- 数据
     def set_data(self, sim):
+        self._pause()          # 重建坐标轴期间停表，避免定时器画到已清掉的艺术家
         self.sim = sim
         self.tr = 0.0
         self.btn.setEnabled(bool(sim.frames))
@@ -124,7 +125,7 @@ class QuenchReplay(QtWidgets.QWidget):
     # ---------------------------------------------------------- 画
     def _draw(self):
         sim = self.sim
-        if sim is None:
+        if sim is None or not sim.frames or not self._ft:
             return
         tr = self.tr
         # 场：取 ≤tr 最近快照
@@ -155,4 +156,4 @@ class QuenchReplay(QtWidgets.QWidget):
         self.slider.blockSignals(True)
         self.slider.setValue(int(tr / h["t"][-1] * 1000))
         self.slider.blockSignals(False)
-        self.cv.draw_idle()
+        self.cv.draw()  # 同步画：延迟绘制会撞上一帧未完的 backing store

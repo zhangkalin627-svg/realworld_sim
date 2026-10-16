@@ -167,6 +167,27 @@ class Scope:
         """取一帧。返回 dict：t0（屏幕左边对应的绝对时间）、tt（触发时刻或 None）、traces、状态文字。"""
         if self.t is None:
             return None
+        # 滚动模式（仿真记录回放）：不触发对齐，显示窗沿记录时间连续右移，到底回卷
+        if getattr(self, "roll", False):
+            if not (self.tdiv > 0):
+                self.tdiv = 1e-9
+            span = HDIV * self.tdiv
+            lo, hi = self.t[0] + span / 2, self.t[-1] - span / 2
+            c = getattr(self, "_roll_c", None)
+            if c is None or not advance or c > hi:
+                c = lo
+            elif advance:
+                c += span * 0.25
+                if c > hi:
+                    c = lo
+            self._roll_c = c
+            t0 = c - span / 2
+            fr = dict(t0=t0, tt=None, traces={}, status=f"滚动回放（仿真结果）t0={eng(t0, 's')}", center=c, trig_no=None)
+            for ch in self.ch:
+                if ch.on and ch.source and self.raw(ch.n) is not None:
+                    fr["traces"][ch.n] = self.window(ch.n, t0, t0 + span)
+            self.last = fr
+            return fr
         if not (self.tdiv > 0):  # tdiv≤0 无意义，钳到最小 1 ns
             self.tdiv = 1e-9
         if self.trig.mode == "Single" and self.single_done and self.last is not None:
