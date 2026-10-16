@@ -28,9 +28,12 @@ def drive_fw(T_prog, k_prog, t_end, fault_at=None, fault_C=None):
     phis = [h[3] for h in hist]
     tail = [h[3] for h in hist if h[0] > t_end - 0.1]
     gate_last = lp.gate_rise
+    ptail = [h[5] for h in hist if h[0] > t_end - 0.1]
     return dict(lock_t=lock_t, fault_t=fault_t,
-                f_end=hist[-1][2], phi_end=statistics.mean(tail), phi_min=min(phis),
-                P_end=statistics.mean([h[5] for h in hist if h[0] > t_end - 0.1]),
+                f_end=hist[-1][2] if hist else None,
+                phi_end=statistics.mean(tail) if tail else None,
+                phi_min=min(phis) if phis else None,
+                P_end=statistics.mean(ptail) if ptail else None,
                 n_cycles=len(hist), sim_s=round(el, 1), gate_last=gate_last, lp=lp)
 
 def ideal_power(T, k, C=None):
