@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """⑧ 整机联动：上电 → PLC → 变频器 → 主回路 → 机械 → 加热 → 喷淋，一次跑完整条链，改 PLC 程序/注入故障/看结果。"""
 import html as _h
+import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from .machine import scenarios as SC
 from .machine.plc_prog import MACHINE_IL, IO_MAP
-from .machine.viz import plot_machine
+from .machine.viz import plot_machine, STEP_NAME
 
 COLOR = {"OK": "#1a7f37", "WARN": "#b26a00", "FAIL": "#c62828"}
 
@@ -64,7 +65,25 @@ class MachinePage(QtWidgets.QWidget):
         lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setFixedWidth(440); lay.addWidget(lw)
         self.tabs = QtWidgets.QTabWidget()
         self.fig = Figure(figsize=(9, 8)); self.cv = FigureCanvasQTAgg(self.fig)
-        self.tabs.addTab(self.cv, "整机曲线")
+        w1 = QtWidgets.QWidget(); v1 = QtWidgets.QVBoxLayout(w1); v1.setContentsMargins(2, 2, 2, 2)
+        v1.addWidget(self.cv, 1)
+        # 回放游标：拖动或播放查看任意时刻整机状态（均为仿真结果）
+        bar = QtWidgets.QHBoxLayout()
+        self.btn_play = QtWidgets.QPushButton("▶ 播放"); self.btn_play.setFixedWidth(70); self.btn_play.setEnabled(False)
+        self.btn_play.clicked.connect(self._toggle_play)
+        self.speed = QtWidgets.QComboBox(); self.speed.addItems(["0.5×", "1×", "2×", "4×", "8×"]); self.speed.setCurrentIndex(1); self.speed.setFixedWidth(64)
+        self.tcur = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.tcur.setRange(0, 1000); self.tcur.setEnabled(False)
+        self.tcur.valueChanged.connect(self._slider)
+        self.tlab = QtWidgets.QLabel("t = —"); self.tlab.setFixedWidth(96)
+        bar.addWidget(self.btn_play); bar.addWidget(self.speed); bar.addWidget(self.tcur, 1); bar.addWidget(self.tlab)
+        v1.addLayout(bar)
+        self.cread = QtWidgets.QLabel("（仿真完成后，拖动游标或点播放，查看任意时刻整机状态；均为仿真结果）")
+        self.cread.setWordWrap(True); self.cread.setStyleSheet("color:#333; background:#f3f5f8; padding:4px; border-radius:4px")
+        v1.addWidget(self.cread)
+        self.tabs.addTab(w1, "整机曲线")
+        self._T = None; self._cur_lines = []; self._tc = 0.0
+        self._play_timer = QtCore.QTimer(self); self._play_timer.setInterval(40)
+        self._play_timer.timeout.connect(self._tick)
         self.fig2 = Figure(figsize=(9, 6)); self.cv2 = FigureCanvasQTAgg(self.fig2)
         self.tabs.addTab(self.cv2, "器件温升 / 8 h 外推")
         self.tbl = QtWidgets.QTableWidget(); self.tabs.addTab(self.tbl, "每件工件结果")
@@ -79,6 +98,81 @@ class MachinePage(QtWidgets.QWidget):
         lay.addWidget(self.tabs, 1)
         self._sel()
 
+    # ---------- 回放游标 ----------
+    def _setup_cursor(self):
+        t = np.asarray(self.m.log["t"], float)
+        if t.size < 2:
+            return
+        self._T = t
+        self._cur_lines = [a.axvline(t[0], color="#1565c0", lw=1.5, alpha=0.85, zorder=5) for a in self.fig.axes]
+        self.tcur.setEnabled(True); self.btn_play.setEnabled(True)
+        self._tc = float(t[0])
+        self.tcur.blockSignals(True); self.tcur.setValue(0); self.tcur.blockSignals(False)
+        self._scrub(self._tc)
+
+    def _slider(self, v):
+        if self._T is None:
+            return
+        self._scrub(float(self._T[0]) + (float(self._T[-1]) - float(self._T[0])) * v / 1000.0)
+
+    def _toggle_play(self):
+        if self._T is None:
+            return
+        if self._play_timer.isActive():
+            self._stop_play()
+        else:
+            if self._tc >= float(self._T[-1]) - 1e-9:
+                self._tc = float(self._T[0])
+            self._play_timer.start(); self.btn_play.setText("⏸ 暂停")
+
+    def _stop_play(self):
+        self._play_timer.stop()
+        if hasattr(self, "btn_play"):
+            self.btn_play.setText("▶ 播放")
+
+    def _tick(self):
+        if self._T is None:
+            self._stop_play(); return
+        t0, t1 = float(self._T[0]), float(self._T[-1])
+        spd = [0.5, 1, 2, 4, 8][self.speed.currentIndex()]
+        self._tc += 0.04 * spd * (t1 - t0) / 60.0   # 1× 约 60 s 扫完全程
+        if self._tc >= t1:
+            self._scrub(t1)
+            self._stop_play()
+            self._tc = t0
+            self.tcur.blockSignals(True); self.tcur.setValue(0); self.tcur.blockSignals(False)
+            self._scrub(t0)
+            return
+        self.tcur.blockSignals(True)
+        self.tcur.setValue(int(round(1000.0 * (self._tc - t0) / max(t1 - t0, 1e-9))))
+        self.tcur.blockSignals(False)
+        self._scrub(self._tc)
+
+    def _scrub(self, tc):
+        t = self._T
+        if t is None:
+            return
+        self._tc = tc
+        for ln in self._cur_lines:
+            ln.set_xdata([tc, tc])
+        i = int(np.searchsorted(t, tc, "right")) - 1
+        i = max(0, min(i, len(t) - 1))
+        L = self.m.log
+        g = lambda k: float(np.asarray(L[k], float)[i])
+        def num(k, fmt="{:.0f}"):
+            v = g(k)
+            return fmt.format(v) if np.isfinite(v) else "—"   # 无工件等时段如实显示 —
+        step_i = int(np.asarray(L["step"], float)[i])
+        fault_on = int(np.asarray(L["fault"], float)[i]) > 0
+        self.tlab.setText(f"t = {tc:.2f} s")
+        self.cread.setText(
+            f"步进【{STEP_NAME.get(step_i, str(step_i))}】｜母线 {g('Vbus'):.0f} V｜开关频率 {g('f'):.1f} kHz｜"
+            f"输出 {num('P_out','{:.1f}')} kW → 工件 {num('P_wp','{:.1f}')} kW｜工件表面 {num('T_wp')} °C｜线圈 {num('T_coil')} °C｜"
+            f"水箱 {g('T_tank'):.1f} °C｜冷却水 {g('cw'):.1f} / 喷淋 {g('spray'):.1f} L/min｜"
+            f"线圈位置 {'上' if g('pos') < 0.5 else '下'}" + ("｜⚠ 变频器故障 ON" if fault_on else "") +
+            "　（均为仿真结果）")
+        self.cv.draw_idle()
+
     def _sel(self):
         k = self.sel.currentData()
         self.desc.setText(SC.SCENARIOS[k]["desc"])
@@ -87,6 +181,8 @@ class MachinePage(QtWidgets.QWidget):
     def simulate(self):
         if self.worker is not None and self.worker.isRunning():
             return
+        self._stop_play()
+        self.tcur.setEnabled(False); self.btn_play.setEnabled(False)
         k = self.sel.currentData()
         kw = dict(p_air=self.air.value(), UA=self.ua.value(), T_tank0=self.tank.value())
         il = self.ed.toPlainText()
@@ -110,6 +206,7 @@ class MachinePage(QtWidgets.QWidget):
                           (f"{S['t_bus90']:.2f} s" if S["t_bus90"] else "—") + "，变频器就绪 " + (f"{S['t_ready']:.2f} s" if S["t_ready"] else "—") +
                           f"；输出峰值电流 {S['I_pk_max']:.0f} A</span>")
         plot_machine(self.fig, m); self.cv.draw()
+        self._setup_cursor()
         self._plot_thermal(m, S)
         rows = m.done
         self.tbl.clear(); self.tbl.setColumnCount(8); self.tbl.setRowCount(len(rows))
