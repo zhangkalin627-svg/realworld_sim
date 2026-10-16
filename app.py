@@ -248,6 +248,9 @@ class MainWindow(QtWidgets.QMainWindow):
         from rw.gui_machine import MachinePage
         self.machine = MachinePage()
         self.top.addTab(self.machine, "⑧ 整机联动")
+        from rw.gui_pll import PLLDemoPage
+        self.pll_demo = PLLDemoPage()
+        self.top.addTab(self.pll_demo, "⑧b 锁相演示")
         from rw.gui_world3d import World3DPage
         self.w3d = World3DPage()
         self.top.addTab(self.w3d, "⑨ 三维装配世界")
