@@ -29,20 +29,20 @@ def _steel_s(T):
 class Spec:
     rated_kW: float = 100.0
     # 电网与母线
-    V_ll: float = 380.0          # 线电压 V
-    Rs: float = 0.02             # 电网+变压器+整流等效串联电阻 Ω（冲击电流用）
-    L_line: float = 0.15e-3      # 进线电抗 H（≈3.3 %，以 100 kW/380 V 为基准）
-    C_bus: float = 12.0e-3       # 母线电容 F
+    V_ll: float = 480.0          # 线电压 V（D-001：380→480 Vac 升压变压器直驱，v0.5）
+    Rs: float = 0.205            # 电网+变压器+整流等效串联电阻 Ω（v0.5：与换相电阻合计 0.25，按 B 轨 ±10% 负载母线锚点 576.0/702.1 V 校准）
+    L_line: float = 0.15e-3      # 进线电抗 H（≈2 %，以 100 kW/480 V 为基准）
+    C_bus: float = 10.0e-3       # 母线电容 F（v0.5：B 轨仿真口径 10 mF）
     R_pc: float = 33.0           # 预充电阻 Ω（τ = 0.40 s）
     R_bleed: float = 20e3        # 泄放电阻 Ω
     I_dc_rated: float = 210.0    # 直流侧额定电流 A（冲击电流判定基准）
     # 谐振负载（折算到逆变器输出侧；= 旧 10 kW 示例按阻抗 ×0.352 缩放：谐振频率、Q 值不变，满功率在热态 f/f0≈1.07）
-    L_wp_cold: float = 45.8e-6   # 有工件(冷、有磁性)时线圈电感 H
-    L_wp_hot: float = 48.6e-6    # 有工件(过居里点)时
-    L_empty: float = 52.8e-6     # 空线圈
-    C_res: float = 0.932e-6      # 谐振电容 F
-    R_coil: float = 0.293        # 线圈+引线+变压器绕组铜损等效电阻（20°C）Ω
-    R_wp20: float = 2.25         # 工件等效电阻 20°C Ω（随 sqrt(ρ·μr) 变化）
+    L_wp_cold: float = 47.09e-6  # 有工件(冷、有磁性)时线圈电感 H（v0.5：卡布复算 5 匝+引线，5.5:1 折算到原边；f0≈28.4 kHz）
+    L_wp_hot: float = 45.41e-6   # 有工件(过居里点)时（v0.5：居里后 μr→1，L 下降，f0≈28.9 kHz——修正旧版冷热顺序颠倒）
+    L_empty: float = 44.0e-6     # 空线圈（估算：无工件 μ 最低）
+    C_res: float = 0.667e-6      # 谐振电容 F（v0.5：现行硬件 2P+1S 0.667 µF，原边侧串联）
+    R_coil: float = 0.11         # 线圈+引线+变压器绕组铜损等效电阻（20°C）Ω（v0.5：卡布复算 3.37-3.94 mΩ×30.25 折算原边）
+    R_wp20: float = 5.17         # 工件等效电阻 20°C Ω（v0.5：按 B 轨锚点热态总 R=2.89 Ω 反推校准）
     alpha_cu: float = 0.0039
     frac_tr: float = 0.10        # R_coil 里匹配变压器绕组占比（假设）
     frac_lead: float = 0.15      # R_coil 里高频引线占比（假设），其余是线圈本体
@@ -59,6 +59,12 @@ class Spec:
     f_max: float = 60e3
     f_zvs: float = 1.04          # 最低开关频率/谐振频率（保持感性负载，ZVS）
     f_clk: float = 100e6         # 频率发生计数时钟 Hz（周期 = 整数个时钟 → Δf ≈ f²/f_clk），假设
+    # 闭环限值与相移调制（v0.5，D-001：闭环一期必备；限值来源 v0.4 输出箱）
+    I_lim: float = 186.0         # I1 限值 Arms（v0.4 硬件约束）
+    Uc_lim: float = 1540.0       # 谐振电容电压限值 Vrms（v0.4）
+    ctl_mode: str = "pm"         # "pm"=相移调制闭环（D-001 一期必备）；"fm"=旧调频对照
+    m_min: float = 0.30          # 相移调制比下限
+    Km_rel: float = 1.2          # 调制比积分增益 1/s 每单位相对功率误差
     # 控制
     P_set_out: float = 100e3     # 输出功率设定 W（线圈输出，含线圈损耗）
     ramp: float = 250e3          # 软启动 W/s
@@ -83,7 +89,7 @@ class Spec:
             self.cool = CoolingSpec()
 
     def V_src(self, sag=1.0):
-        return 1.35 * self.V_ll * sag
+        return math.sqrt(2.0) * self.V_ll * sag   # v0.5：电容输入滤波母线贴近峰值（B 轨锚点 480→679 V）
 
     def R_comm(self):
         """二极管整流换相压降的等效电阻 3ωL/π（整流平均模型用）。"""
@@ -209,9 +215,9 @@ class Stage:
     def f0(self, T_wp, k):
         return 1.0 / (2 * math.pi * math.sqrt(self.L_of(T_wp, k) * self.sp.C_res))
 
-    def solve(self, Vbus, f, T_wp, k, T_coil):
+    def solve(self, Vbus, f, T_wp, k, T_coil, m=1.0):
         sp = self.sp
-        V1 = 0.9003 * Vbus                        # (4/π)/√2
+        V1 = m * 0.9003 * Vbus                    # (4/π)/√2 × 相移调制比 m（基波近似，v0.5）
         w = 2 * math.pi * f
         L = self.L_of(T_wp, k)
         X = w * L - 1.0 / (w * sp.C_res)
@@ -230,7 +236,7 @@ class Stage:
             mode = "ZVS" if X >= 0 else "容性"; I_off = I * math.sqrt(2) * X / Z
         return dict(I=I, I_pk=I * math.sqrt(2), P_out=P_out, P_wp=I * I * Rw, P_coil=I * I * Rc, P_inv=P_loss,
                     P_in=P_out + P_loss, X=X, Z=Z, R=R, V1=V1, cosphi=R / Z, f0=self.f0(T_wp, k), mode=mode, I_off=I_off,
-                    Vc=I / (w * sp.C_res), f=f)
+                    Vc=I / (w * sp.C_res), f=f, m=m)
 
 
 class Controller:
@@ -239,7 +245,7 @@ class Controller:
 
     def __init__(self, sp: Spec):
         self.sp = sp
-        self.t = 0.0; self.mode = "boot"; self.f = sp.f_max * 0.75
+        self.t = 0.0; self.mode = "boot"; self.f = sp.f_max * 0.75; self.m = 1.0
         self.p_ref = 0.0; self.p_meas = 0.0; self.fault = ""; self.ready = False; self.reached = False
         self.running = False; self.t_en_low = 0.0; self.t_sat = 0.0; self.sat = False
         self.fault_log = []
@@ -279,23 +285,38 @@ class Controller:
         self.running = True; self.mode = "run"; self.ready = True
         self.p_ref = min(sp.P_set_out, self.p_ref + sp.ramp * dt)
         fmin = f0_fn() * sp.f_zvs
-        s = stage_fn(self.f)
-        self.p_meas += (s["P_out"] - self.p_meas) * min(1.0, dt / 2e-3)
-        if sp.Ki > 0:
-            e = (self.p_ref - self.p_meas) / 1e3
-            self.f -= sp.Ki * e * dt * 1e3
-        else:
+        if sp.ctl_mode == "pm":
+            # v0.5 相移调制闭环（D-001 一期必备）：频率固定于谐振点上侧（ZVS），功率经调制比 m 调节，
+            # m 上限由 I1≤186 Arms 与 Uc≤1.54 kVrms 双限值实时折算（v0.4 硬件约束）。
+            self.f = float(np.clip(fmin, 1e3, sp.f_max))
+            self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f
+            s = stage_fn(self.f_q)
+            self.p_meas += (s["P_out"] - self.p_meas) * min(1.0, dt / 2e-3)
+            w = 2 * math.pi * self.f_q
+            i_eff = min(sp.I_lim, sp.Uc_lim * w * sp.C_res)
+            self.m_cap = min(1.0, max(sp.m_min, i_eff * s["Z"] / max(0.9003 * Vbus, 1.0)))
             e = (self.p_ref - self.p_meas) / max(sp.P_set_out, 1.0)
-            self.f -= sp.Ki_rel * e * dt * 1e3
-        self.f = float(np.clip(self.f, fmin, sp.f_max))
-        self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f   # 周期计数量化
-        s = stage_fn(self.f_q)
+            self.m = float(np.clip(self.m + sp.Km_rel * e * dt, sp.m_min, self.m_cap))
+            s = stage_fn(self.f_q)
+            self.sat = self.m >= self.m_cap - 1e-9 and self.p_meas < 0.95 * self.p_ref
+        else:
+            s = stage_fn(self.f)
+            self.p_meas += (s["P_out"] - self.p_meas) * min(1.0, dt / 2e-3)
+            if sp.Ki > 0:
+                e = (self.p_ref - self.p_meas) / 1e3
+                self.f -= sp.Ki * e * dt * 1e3
+            else:
+                e = (self.p_ref - self.p_meas) / max(sp.P_set_out, 1.0)
+                self.f -= sp.Ki_rel * e * dt * 1e3
+            self.f = float(np.clip(self.f, fmin, sp.f_max))
+            self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f   # 周期计数量化
+            s = stage_fn(self.f_q)
+            self.sat = self.f <= fmin + 1.0 and self.p_meas < 0.95 * self.p_ref
         if self.ext_trip:
             code, text = self.ext_trip; self.ext_trip = None
             return self._trip(code, text, s)
         if s["I_pk"] > sp.I_trip_pk:
             return self._trip("OC", f"过流 {s['I_pk']:.0f} A 峰值", s)
-        self.sat = self.f <= fmin + 1.0 and self.p_meas < 0.95 * self.p_ref
         self.t_sat = self.t_sat + dt if self.sat else 0.0
         self.reached = abs(s["P_out"] - self.p_ref) < 0.05 * max(self.p_ref, 1e3) and self.p_ref >= sp.P_set_out - 1
         return s
