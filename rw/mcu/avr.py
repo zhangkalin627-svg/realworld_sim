@@ -68,11 +68,11 @@ class AVR:
     def is_output(self, name):
         return self.ports[name[1]].is_output(int(name[2]))
 
-    def set_input(self, name, level):
-        """外部电路驱动引脚（在当前周期生效）。"""
+    def set_input(self, name, level, cyc=None):
+        """外部电路驱动引脚（默认当前周期生效；cyc=显式周期，供周期精确的注入器用）。"""
         p = self.ports[name[1]]; b = int(name[2])
         p.ext[b] = None if level is None else int(bool(level))
-        p.refresh(self.cyc, (b,))
+        p.refresh(self.cyc if cyc is None else cyc, (b,))
         self.irq_dirty = True
 
     def analog_in(self, ch, cyc):
