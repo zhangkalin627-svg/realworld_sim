@@ -63,6 +63,12 @@ class Spec:
     I_lim: float = 186.0         # I1 限值 Arms（v0.4 硬件约束）
     Uc_lim: float = 1540.0       # 谐振电容电压限值 Vrms（v0.4）
     ctl_mode: str = "pm"         # "pm"=相移调制闭环（D-001 一期必备）；"fm"=旧调频对照
+    track_mode: str = "ideal"    # "ideal"=频率直接用模型谐振点（基线复现）；"pll"=相位锁定环：只用实测相位 φ=atan2(X,R) 跟踪谐振
+    phi_ref: float = 0.22        # PLL 目标相位 rad（感性 ZVS 裕度；Q≈2.85 时 ≈ f/f0·1.04 ≈ 12.7°）
+    pll_K: float = 150e3         # VCO 积分增益 Hz/s 每 rad 相位误差
+    pll_sweep: float = 150e3     # 捕获扫频速率 Hz/s（自高位向下扫到 φ 进捕获窗）
+    pll_capture: float = 0.10    # 捕获窗 rad
+    pll_loss_dwell: float = 0.05 # φ<0（容性，ZVS 丢失）持续此秒数 → LOSS 锁存跳闸
     m_min: float = 0.30          # 相移调制比下限
     Km_rel: float = 1.2          # 调制比积分增益 1/s 每单位相对功率误差
     # 控制
@@ -251,6 +257,8 @@ class Controller:
         self.fault_log = []
         self.ext_trip = None          # (code, text)：过温等外部保护由 Machine 置位
         self.f_q = self.f
+        self.pll = "sweep"       # sweep → locked（track_mode="pll" 时用）
+        self.t_cap = 0.0         # 容性持续时间
 
     def tick(self, dt, en, Vbus, stage_fn, f0_fn):
         """stage_fn(f) → 功率级测量字典；f0_fn() → 当前谐振频率估计(锁相环给出)。返回 stage dict 或 None(未开管)。"""
@@ -288,7 +296,24 @@ class Controller:
         if sp.ctl_mode == "pm":
             # v0.5 相移调制闭环（D-001 一期必备）：频率固定于谐振点上侧（ZVS），功率经调制比 m 调节，
             # m 上限由 I1≤186 Arms 与 Uc≤1.54 kVrms 双限值实时折算（v0.4 硬件约束）。
-            self.f = float(np.clip(fmin, 1e3, sp.f_max))
+            if sp.track_mode == "pll":
+                # 相位锁定环：频率只由实测相位驱动，不知谐振点（v0.31；ideal 为基线复现通道）
+                self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f
+                s_probe = stage_fn(self.f_q)
+                phi = math.atan2(s_probe["X"], s_probe["R"])
+                self.t_cap = self.t_cap + dt if s_probe["X"] < 0 else 0.0
+                if self.t_cap > sp.pll_loss_dwell:
+                    return self._trip("LOSS", "失锁：负载进入容性（ZVS 丢失）", s_probe)
+                if self.pll == "sweep":
+                    self.f -= sp.pll_sweep * dt
+                    if phi >= sp.phi_ref - sp.pll_capture:
+                        self.pll = "locked"
+                else:
+                    self.f += sp.pll_K * (sp.phi_ref - phi) * dt
+                self.f = float(np.clip(self.f, 1e3, sp.f_max))
+                self.phi = phi
+            else:
+                self.f = float(np.clip(fmin, 1e3, sp.f_max))
             self.f_q = sp.f_clk / round(sp.f_clk / self.f) if sp.f_clk > 0 else self.f
             s = stage_fn(self.f_q)
             self.p_meas += (s["P_out"] - self.p_meas) * min(1.0, dt / 2e-3)
