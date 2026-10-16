@@ -2,20 +2,28 @@
 
 每个模块：干什么 → 一键示例 → 看什么。Web 版"一键"= 打开对应模块页签 → 不改任何参数 → 点运行；API 给出可直接抄的 curl。所有输出均为**仿真结果**（工程估算）。
 
+最小安装（只装需要的模块）：`pip install "realworld-sim[induction]"` 按模块替换 extras 名；全量用 `pip install -r requirements.txt`。
+
 通用 API 形态：POST /api/sim/{key} {"params": {...}} → {"job_id"}；轮询 GET /api/job/{job_id}。模块参数 schema：GET /api/modules。
 
 ## 1. 感应加热淬火（key=induction）
+`pip install "realworld-sim[induction]"`
+
 干什么：瓶坯/轴类感应加热 + 喷淋淬火全过程 FEM：温度场、硬度 HRC、硬化层深度、过烧/熔化报警。
 一键示例：默认参数（瓶口外径 22、20 kHz、目标 900°C、水喷 3 s）直接运行。
 看什么：温度场动画、表面/心部曲线、硬化层深度和 HRC 摘要。API：curl -X POST /api/sim/induction -d '{"params":{}}'
 进阶：勾"非线性 B-H+居里点"对比冷/热态差异；速度档"快速"快 1.6–2.1 倍（精确档仍是基线）。
 
 ## 2. 材料库（key=materials）
+`pip install realworld-sim`（基础依赖即可）
+
 干什么：118 元素 + 31 牌号性能查询；45 钢相变点与淬火介质换热参数；任意配比"配合金"先判互溶再估算。
 一键示例：默认查询直接运行。
 看什么：密度/熔点/电阻率/弹性模量等表格，配合金给"粗估"标注的范围。
 
 ## 3. 三维装配世界（key=world3d）
+`pip install "realworld-sim[world3d]"`
+
 干什么：摆零件→MuJoCo 刚体重力/碰撞/摩擦→稳定性/梁应力/螺栓/轴承/赫兹接触体检，3D 动画回放。
 一键示例（13 个预设，最推荐的三个）：
 - 「叠积木 外伸系数 0.95（应稳）」vs「1.10（应倒）」——稳定性判据演示
@@ -25,12 +33,16 @@
 API：curl -X POST /api/sim/world3d -d '{"params":{"preset":"水里的浮沉"}}'
 
 ## 4. PLC 虚拟调试（key=plc）
+`pip install realworld-sim`（基础依赖即可）
+
 干什么：三菱 FX 指令表（含 STL 步进、T/C）解释器 + 单工位感应淬火设备模型实时联仿。
 一键示例：默认内置程序直接运行（含急停演示剧本：运行中 X002 按下 2 s 再复位）。
 看什么：逻辑分析仪时序图（急停/启动事件有竖线标注）、I/O 灯、节拍与不合格统计。
 玩法：直接在页面改指令表再跑，看程序错误怎么被设备模型暴露。
 
 ## 5. 流体·管网（key=flow_net）
+`pip install "realworld-sim[flow]"`（水锤/放空射流同）
+
 干什么：两工位并联喷淋管网：泵曲线+阀/过滤器/软管/喷淋孔 → 流量分配、压力沿程、泵工作点、汽蚀与超速体检。
 一键示例：默认管网直接运行。看什么：两支路流量分配是否失衡、泵工作点落在曲线哪、NPSH 余量。
 
@@ -43,11 +55,15 @@ API：curl -X POST /api/sim/world3d -d '{"params":{"preset":"水里的浮沉"}}'
 一键示例：默认直接运行。看什么：数值解 vs 解析解对照表、射流落点。
 
 ## 8. 单片机 + PLC 联合仿真（key=mcu）
+`pip install "realworld-sim[mcu]"`（Cortex-M 核心需 unicorn；不装用 AVR 行为模型）
+
 干什么：AVR（ATmega328P 风格，周期精确）+ FX PLC + 半桥电路统一时间轴：握手→PWM 软启动→ADC 过流→封锁→报警→复位。
 一键示例：默认演示（heater_demo，含短路过流故障注入）。
 看什么：关键时刻全部从波形实测标注，串口终端输出，波形可送示波器。
 
 ## 9. 电路仿真（key=circuit，需 ngspice）
+`pip install realworld-sim` + 系统装 ngspice 外部程序
+
 干什么：示例电路或自定义 SPICE/KiCad 网表 → ngspice 瞬态/交流 → 虚拟示波器（4 通道、FFT、10 项自动测量）。
 一键示例（5 个内置）：rc（RC 方波）、rlc（RLC 串联谐振）、rect（桥式整流+电容滤波）、astable（运放方波振荡器）、halfbridge（MOSFET 半桥+串联谐振=感应加热拓扑）。
 看什么：波形+自动测量值与理论值对照（示例内置理论说明）。

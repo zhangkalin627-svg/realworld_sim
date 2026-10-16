@@ -29,6 +29,9 @@
 ## 模块说明与一键示例
 - docs/GUIDE.md：每模块"干什么+一键示例（含 curl）+看什么"；13 个三维预设、5 个电路示例、PLC 急停演示剧本均已列明
 
+## 按需安装
+- 基础包仅 numpy/scipy/matplotlib；按模块 extras：induction(skfem)/world3d(mujoco,trimesh)/flow(fluids)/mcu(unicorn 可选)/web(fastapi,uvicorn)/desktop(PySide6)/all；电路模块需系统级 ngspice。pyproject.toml 为唯一依赖清单，requirements.txt 保留为全量等价
+
 ## 反馈（AI 可自动提交）
 - GitHub Issues（推荐，机器可提交）：https://github.com/zhangkalin627-svg/realworld_sim/issues （模板：bug 报告 / 仿真口径质疑 / 功能请求；`gh issue create` 可用）
 - 诊断摘要（随 issue 粘贴）：仓库根目录 `python3 diag.py` 输出 JSON（版本/commit/环境/自检）
