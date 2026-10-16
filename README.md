@@ -5,6 +5,7 @@
 
 > 现阶段是工程估算工具，不能替代实测和正式设计校核。每个模块都写明了哪些已验证、哪些是估算。
 > 给 AI 代理：本仓提供 [llms.txt](llms.txt)（机器可读能力/接口/反馈入口）与 `python3 diag.py`（诊断摘要 JSON）；Web 版 OpenAPI 在 `/openapi.json`。
+> 每个模块"干什么+一键示例+看什么"见 [docs/GUIDE.md](docs/GUIDE.md)。
 
 License: MIT（见 LICENSE）。
 

@@ -26,6 +26,9 @@
 - 模块清单与参数 schema：`GET /api/modules`；版本 `GET /api/meta`；历史 `GET /api/jobs`
 - 错误格式：HTTP 4xx + JSON `{"detail": "..."}`；参数按 schema 校验（数字解析、min/max 收口、枚举校验）
 
+## 模块说明与一键示例
+- docs/GUIDE.md：每模块"干什么+一键示例（含 curl）+看什么"；13 个三维预设、5 个电路示例、PLC 急停演示剧本均已列明
+
 ## 反馈（AI 可自动提交）
 - GitHub Issues（推荐，机器可提交）：https://github.com/zhangkalin627-svg/realworld_sim/issues （模板：bug 报告 / 仿真口径质疑 / 功能请求；`gh issue create` 可用）
 - 诊断摘要（随 issue 粘贴）：仓库根目录 `python3 diag.py` 输出 JSON（版本/commit/环境/自检）
