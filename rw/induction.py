@@ -600,13 +600,16 @@ class InductionQuenchSim:
                 "A_end_heat": cx(self.A_end_heat), "I_end": self.I_end,
                 "mur_state": None if self._mur_state is None else self._mur_state.tolist()}
 
-    def run(self, progress=None, checkpoint=None, resume=None, checkpoint_every=200):
+    def run(self, progress=None, checkpoint=None, resume=None, checkpoint_every=200, record_every=None):
         nT = self.tb.N
         T = np.full(nT, self.T0)
         Tpeak = T.copy()
         t800 = np.full(nT, np.nan)
         t500 = np.full(nT, np.nan)
         hist = dict(t=[], Tsurf=[], Tcore=[], Tin=[], I=[])
+        # 动画回放用场快照（record_every=秒间隔；None 关闭）。frames=[(t, T.copy())]，仅引用期间内存
+        self.frames = []
+        next_rec = 0.0 if record_every else None
         # 监测点：淬火区中部 z = L - zone/2
         g = self.g
         p = self.th_mesh_mm.p
@@ -692,6 +695,9 @@ class InductionQuenchSim:
             hist["Tsurf"].append(T[i_out])
             hist["Tcore"].append(T[i_mid])
             hist["Tin"].append(T[i_in])
+            if next_rec is not None and t >= next_rec:
+                self.frames.append((t, T.copy()))
+                next_rec = t + record_every
             if progress and s % 20 == 0:
                 progress(min(t / t_end, 1.0))
             if checkpoint and checkpoint_every and s % checkpoint_every == 0:
