@@ -34,6 +34,9 @@ License: MIT（见 LICENSE）。
 ./install_ubuntu.sh   # 第一次
 ./run.sh              # 打开软件
 .venv/bin/python validate.py   # 自检
+
+# 只装某个模块的最小依赖（打包成 pip 包后）：pip install "realworld-sim[induction|world3d|flow|mcu|web|desktop|all]"
+# 各模块对应的最小安装命令见 docs/GUIDE.md；requirements.txt = 全量，等价 [all,web,desktop]
 ```
 电路仿真需要 ngspice：`install_ubuntu.sh` 里已包含 `sudo apt install ngspice`。
 可选的 Cortex-M 核心需要 unicorn：`./install_ubuntu.sh --with-unicorn`（或 `.venv/bin/pip install unicorn`），不装也能用其它全部功能。

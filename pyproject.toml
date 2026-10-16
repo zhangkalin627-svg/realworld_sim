@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realworld-sim"
+dynamic = ["version"]
+description = "真实世界工程仿真沙盒：感应淬火、PLC/单片机虚拟调试、三维装配物理、流体管网、电路仿真（AI 代理与人类工程师通用）"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = ["numpy", "scipy", "matplotlib"]
+
+[project.optional-dependencies]
+# 按模块最小安装：pip install realworld-sim[<模块>]
+induction = ["scikit-fem>=10"]        # 感应加热淬火（FEM）
+world3d   = ["mujoco>=3.1", "trimesh", "networkx", "rtree"]  # 三维装配世界
+flow      = ["fluids"]                # 流体三件：管网/水锤/放空射流
+mcu       = ["unicorn"]               # 单片机 Cortex-M 核心（可选，不装仍可用 AVR 行为模型）
+circuit   = []                        # 电路仿真本体零额外依赖；需系统装 ngspice 外部程序
+web       = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]  # Web/API 服务
+desktop   = ["PySide6-Essentials>=6.6"]                    # 桌面 GUI
+em3d      = ["gmsh>=4.11"]            # 可选：非圆截面涡流 3D
+dev       = ["httpx>=0.27"]           # 测试（TestClient）
+all = ["scikit-fem>=10", "mujoco>=3.1", "trimesh", "networkx", "rtree", "fluids", "unicorn", "fastapi>=0.110", "uvicorn[standard]>=0.29", "PySide6-Essentials>=6.6", "gmsh>=4.11", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/zhangkalin627-svg/realworld_sim"
+Issues   = "https://github.com/zhangkalin627-svg/realworld_sim/issues"
+
+[tool.setuptools]
+packages = ["rw", "rw.circuit", "rw.em", "rw.flow", "rw.machine", "rw.matdb", "rw.mcu", "rw.plc", "rw.world", "rw.world3d", "web"]
+
+[tool.setuptools.dynamic]
+version = {attr = "rw.version.VERSION"}

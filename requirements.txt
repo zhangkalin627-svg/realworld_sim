@@ -1,3 +1,5 @@
+# 全量安装（等价于 pip install "realworld-sim[all,web,desktop]"）。
+# 只装某个模块的最小依赖：pip install "realworld-sim[<模块>]"，见 docs/GUIDE.md 或 pyproject.toml 的 extras。
 numpy
 scipy
 matplotlib
