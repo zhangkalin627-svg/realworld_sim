@@ -1,0 +1,25 @@
+name: 仿真口径质疑（最优先）
+description: 认为某个模型/公式/假设不对。欢迎挑错，请附依据。
+labels: ["physics-review"]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: 涉及模型与公式
+      description: 模块 + 公式/假设（如 m=sin(φ/2)）
+    validations: {required: true}
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么认为不对
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 依据（教科书/标准/实测/推导）
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: 可复现的仿真对比（可选）
+      description: 注意：本软件输出均为仿真结果（工程估算）

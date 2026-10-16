@@ -1,0 +1,36 @@
+name: Bug 报告（AI 可自动提交）
+description: 崩溃、报错、行为与文档不符。机器可读表单；gh issue create 可用。
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / commit
+      description: diag.py 输出里的 version 与 git_commit
+    validations: {required: true}
+  - type: dropdown
+    id: module
+    attributes:
+      label: 模块
+      options: [感应加热淬火, 结构受力, PLC 虚拟调试, 物理沙盒, 材料库, 电路示波器, 单片机联仿, 三维装配世界, 流体, 整机联动, Web/API, 安装]
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现步骤
+      description: 输入参数或文件、操作序列；Web/API 请给 curl 与返回
+    validations: {required: true}
+  - type: textarea
+    id: expect_actual
+    attributes:
+      label: 期望 vs 实际
+    validations: {required: true}
+  - type: textarea
+    id: diag
+    attributes:
+      label: 诊断摘要（python3 diag.py 输出 JSON）
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
