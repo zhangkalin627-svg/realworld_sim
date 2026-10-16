@@ -6,3 +6,4 @@ models/private_boards/*
 *.pyc
 !models/private_boards/README.md
 realworld_jobs.db
+build/\n*.egg-info/
