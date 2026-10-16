@@ -92,7 +92,7 @@ class Machine:
         # 日志
         self.log = {k: [] for k in ("t", "Vbus", "I_src", "f", "P_out", "P_wp", "P_in", "I_pk", "T_wp", "T_coil", "T_tank",
                                     "cw", "spray", "pos", "step", "ready", "fault", "run", "reached", "P_ref",
-                                    "Tj", "T_plate", "T_w", "T_cap", "T_tr", "T_cab", "P_invloss", "Vc", "phi", "I_off")}
+                                    "Tj", "T_plate", "T_w", "T_cap", "T_tr", "T_cab", "P_invloss", "Vc", "phi", "I_off", "m")}
         self.ylog = []; self.xlog = []
         self.LOG_MAX = 200000            # 日志行数上限；超出后整体 2 倍降采样（内存有界，8 h 长跑 < 约 200 MB）
         self.EV_MAX = 10000              # 事件条数上限；超出后批量丢弃最旧一半（保留近期事件，内存有界，issue 2031）
@@ -239,7 +239,7 @@ class Machine:
         k = self.k_coupling()
         en = Y["Y004"]
         Vb = self.bus.V
-        stage_fn = lambda f: self.stage.solve(Vb, f, T_wp, k, self.T_coil)
+        stage_fn = lambda f: self.stage.solve(Vb, f, T_wp, k, self.T_coil, self.ctl.m)
         f0_fn = lambda: self.stage.f0(T_wp, k)
         s = self.ctl.tick(dt, en, Vb, stage_fn, f0_fn)
         if s is not None and self.ctl.running:
@@ -422,7 +422,7 @@ class Machine:
                 return self._plc_events()
         L = self.log
         L["t"].append(self.t); L["Vbus"].append(self.bus.V); L["I_src"].append(self.bus.I_src)
-        L["f"].append(self.ctl.f / 1e3 if self.ctl.running else 0.0)
+        L["f"].append(self.ctl.f / 1e3 if self.ctl.running else 0.0); L["m"].append(self.ctl.m if self.ctl.running else 0.0)
         L["P_out"].append(s["P_out"] / 1e3); L["P_wp"].append(s["P_wp"] / 1e3); L["P_in"].append(s["P_in"] / 1e3)
         L["I_pk"].append(ipk); L["T_wp"].append(self.part.T if self.part is not None else np.nan)
         L["T_coil"].append(self.T_coil); L["T_tank"].append(self.T_tank)

@@ -27,7 +27,7 @@ SCENARIOS = {
     "longrun_hex": dict(name="长时间运行：淬火水箱有换热器，8 小时后", desc="同上，但淬火水箱带换热器 UA=500 W/K。", n_parts=4),
     # ---- 100 kW 满功率 / 近满功率
     "fp_burnin": dict(name="【满功率】100 kW 满载老化 8 h（夏天 35°C，冷水机 30 kW）", desc="假负载（热态 850°C 工件，阻抗恒定）连续 100 kW：详细仿真 60 s，再把冷却水/器件温升外推 8 h。看各器件温升、余量、保护会不会误动。", n_parts=0),
-    "fp_burnin_hot": dict(name="【满功率】8 h 老化：40°C 高温 + 冷水机只有 20 kW", desc="冷水机选小了/夏天降额：冷却水慢慢升温，看第几小时进水温度或 IGBT 过温保护动作（应该动作，不该拒动）。", n_parts=0),
+    "fp_burnin_hot": dict(name="【满功率】8 h 老化：40°C 高温 + 冷水机只有 3 kW", desc="冷水机选小了/夏天降额：冷却水慢慢升温，看第几小时进水温度或 IGBT 过温保护动作（应该动作，不该拒动）。（v0.5 基线损耗下 20 kW 已足够，场景从 20 kW 改 3 kW 保持'不足'语义）", n_parts=0),
     "fp_flow60": dict(name="【满功率】冷却水流量降到 60%（滤网堵）", desc="流量开关定在 50%，不会报警：看线圈/IGBT/变压器温升还有没有余量，过温保护能否兜底。", n_parts=0),
     "fp_curie": dict(name="【满功率】大工件冷态起步过居里点（过流定值 480 A）", desc="2 kg 钢件从冷态 100 kW 加热：冷态磁性阻抗大功率上不去，过居里点后阻抗骤降、电流冲高，变频器追功率。", n_parts=0),
     "fp_curie_tight": dict(name="【满功率·误动】同上，但过流定值整定太紧（= 额定峰值，不留余量）", desc="过居里点那一下电流超出定值 → 过流误跳，工件半途。", n_parts=0),
@@ -58,7 +58,7 @@ def build(key, p_air=0.55, sag=1.0, il=None, T_tank0=25.0, UA=500.0, **kw):
             # （第一版取 1.05×：仿真里过居里点只冲高约 2 %，不误动 → 改为不留余量才复现误动。）
             spec.I_trip_pk = round(math.sqrt(2) * math.sqrt(spec.P_set_out / 1.51))
         if key == "fp_burnin_hot":
-            spec.cool.Q_chiller = 20e3; T_amb = 40.0
+            spec.cool.Q_chiller = 3e3; T_amb = 40.0
         m = Machine(il=il, spec=spec, p_air=p_air, sag=sag, UA_hex=UA, T_tank0=T_tank0, load=load, T_amb=T_amb, **kw)
         m.press("X000", 0.5); m.scenario = key
         return m
@@ -202,7 +202,8 @@ def power_report(m, S):
     f = float(L["f"][i] * 1e3)
     T_wp = m.part.T if m.part is not None else 850.0
     k = 1.0
-    st = m.stage.solve(float(L["Vbus"][i]), f, T_wp if np.isfinite(T_wp) else 850.0, k, float(L["T_coil"][i]))
+    mm = float(L["m"][i]) if "m" in L else 1.0
+    st = m.stage.solve(float(L["Vbus"][i]), f, T_wp if np.isfinite(T_wp) else 850.0, k, float(L["T_coil"][i]), mm)
     Lz = ST.component_losses(sp, st, float(L["Vbus"][i]), f, st["P_in"], m.k_rip() * st["P_in"] / float(L["Vbus"][i]))
     rec = ST.rectifier_pf(int(round(st["P_in"] / 1e3)), V_ll=sp.V_ll, L=sp.L_line, Rs=sp.Rs, C=sp.C_bus)
     P_grid = rec["P"] + Lz["rect"]
@@ -210,7 +211,7 @@ def power_report(m, S):
     eta_tot = st["P_wp"] / (st["P_in"] + Lz["rect"] + Lz["tr_core"])
     # 频率分辨率 → 功率分辨率
     df = f * f / sp.f_clk if sp.f_clk > 0 else 0.0
-    s2 = m.stage.solve(float(L["Vbus"][i]), f + max(df, 1.0), T_wp if np.isfinite(T_wp) else 850.0, k, float(L["T_coil"][i]))
+    s2 = m.stage.solve(float(L["Vbus"][i]), f + max(df, 1.0), T_wp if np.isfinite(T_wp) else 850.0, k, float(L["T_coil"][i]), mm)
     dP = abs(s2["P_out"] - st["P_out"]) * (df / max(df, 1.0)) if df > 0 else 0.0
     I_coil = st["I"] * sp.cool.n_tr
     sf = ST.stray_field(I_coil, f)

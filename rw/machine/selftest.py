@@ -154,7 +154,7 @@ def run_100k():
         La["inv_total"] / 1e3, La["rect"] / 1e3, (La["tr_cu"] + La["tr_core"]) / 1e3, La["P_coil"] / 1e3, se["Q_ch"][-1] / 1e3))
     m2, S2 = SC.run("fp_burnin_hot")
     tr = S2["lr"]["trip"]
-    print("[整机·100kW] 40°C + 冷水机 20 kW：%s" % ("第 %.2f h %s" % (tr[0], tr[2]) if tr else "8 h 无保护动作（拒动！）"))
+    print("[整机·100kW] 40°C + 冷水机 3 kW（v0.5 损耗口径下冷水机不足）：%s" % ("第 %.2f h %s" % (tr[0], tr[2]) if tr else "8 h 无保护动作（拒动！）"))
     assert tr is not None, "冷却能力不足时保护拒动"
     m3, S3 = SC.run("fp_short")
     hw = S3["tr"]["hw"]
