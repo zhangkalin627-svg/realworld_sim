@@ -55,6 +55,14 @@ class MachinePage(QtWidgets.QWidget):
         fl.addRow("换热器 UA", self.ua)
         self.tank = QtWidgets.QDoubleSpinBox(); self.tank.setRange(5, 80); self.tank.setValue(25); self.tank.setSuffix(" °C")
         fl.addRow("水箱初始温度", self.tank)
+        self.auto = QtWidgets.QCheckBox("改参数后自动重算（约 20 s，均为仿真结果）")
+        self.auto.setChecked(True)
+        fl.addRow(self.auto)
+        self._deb = QtCore.QTimer(self); self._deb.setSingleShot(True); self._deb.setInterval(2000)
+        self._deb.timeout.connect(self._auto_start)
+        self._pending = False
+        for wgt in (self.air, self.ua, self.tank):
+            wgt.valueChanged.connect(self._kick)
         self.btn = QtWidgets.QPushButton("▶  运行整机联动"); self.btn.setMinimumHeight(34); self.btn.clicked.connect(self.simulate)
         fl.addRow(self.btn)
         self.status = QtWidgets.QLabel("选场景后点运行。PLC 程序在右侧「PLC 程序」页可改（改完再点运行）。"); self.status.setWordWrap(True)
@@ -173,6 +181,17 @@ class MachinePage(QtWidgets.QWidget):
             "　（均为仿真结果）")
         self.cv.draw_idle()
 
+    def _kick(self, *_):
+        if self.auto.isChecked() and self.m is not None:
+            self._deb.start()
+
+    def _auto_start(self):
+        if self.worker is not None and self.worker.isRunning():
+            self._pending = True
+            return
+        self.status.setText("参数已改，自动重算中 …")
+        self.simulate()
+
     def _sel(self):
         k = self.sel.currentData()
         self.desc.setText(SC.SCENARIOS[k]["desc"])
@@ -181,6 +200,7 @@ class MachinePage(QtWidgets.QWidget):
     def simulate(self):
         if self.worker is not None and self.worker.isRunning():
             return
+        self._deb.stop()
         self._stop_play()
         self.tcur.setEnabled(False); self.btn_play.setEnabled(False)
         k = self.sel.currentData()
@@ -208,6 +228,9 @@ class MachinePage(QtWidgets.QWidget):
         plot_machine(self.fig, m); self.cv.draw()
         self._setup_cursor()
         self._plot_thermal(m, S)
+        if self._pending:
+            self._pending = False
+            QtCore.QTimer.singleShot(0, self._auto_start)
         rows = m.done
         self.tbl.clear(); self.tbl.setColumnCount(8); self.tbl.setRowCount(len(rows))
         self.tbl.setHorizontalHeaderLabels(["工件", "判定", "加热 s", "等效加热 s", "峰值 °C", "等效淬火 s", "HRC(表)", "说明"])
