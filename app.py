@@ -42,7 +42,7 @@ class Worker(QtCore.QObject):
                                            mur_cold=p["mur_cold"], nonlinear=p["nonlinear"], conc=p.get("conc"))
             self.progress.emit(10, f"计算中：{p['power_kw']:.2f} kW …")
             sim = InductionQuenchSim(geom=geom, **p)
-            res = sim.run(progress=lambda x: self.progress.emit(10 + int(88 * x), "加热 → 淬火 …"))
+            res = sim.run(progress=lambda x: self.progress.emit(10 + int(88 * x), "加热 → 淬火 …"), record_every=0.05)
             self.done.emit(sim, res)
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -124,6 +124,9 @@ class InductionPage(QtWidgets.QWidget):
 
         # ---------------- 右侧图
         self.tabs = QtWidgets.QTabWidget()
+        from rw.gui_replay import QuenchReplay
+        self.replay = QuenchReplay()
+        self.tabs.addTab(self.replay, "▶ 动态回放（仿真结果）")
         self.cv = {}
         for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度"), ("mur", "磁导率分布")]:
             c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
@@ -198,6 +201,9 @@ class InductionPage(QtWidgets.QWidget):
                 plot_mur_map(ax, sim, "加热结束时磁导率分布 (log10 μ_eff)" if hasattr(sim, "_mur_el") else "")
             c.fig.tight_layout()
             c.draw()
+        if sim.frames:
+            self.replay.set_data(sim)
+            self.tabs.setCurrentWidget(self.replay)
 
 
 class MainWindow(QtWidgets.QMainWindow):
