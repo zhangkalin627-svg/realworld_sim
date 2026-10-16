@@ -178,7 +178,10 @@ class CircuitPage(QtWidgets.QWidget):
         self.run_btn = QtWidgets.QPushButton("▶ 运行"); self.run_btn.setCheckable(True); self.run_btn.toggled.connect(self.toggle_run)
         self.run_btn.setToolTip("逐个触发点刷新（仿真记录回放，相当于示波器连续采集）")
         bs = QtWidgets.QPushButton("单次"); bs.clicked.connect(self.single)
-        rb.addWidget(self.run_btn); rb.addWidget(bs)
+        self.roll = QtWidgets.QCheckBox("滚动")
+        self.roll.setToolTip("显示窗沿仿真记录连续右移（回放已算好的仿真结果），到底回卷；配合「运行」")
+        self.roll.toggled.connect(self._roll_mode)
+        rb.addWidget(self.run_btn); rb.addWidget(bs); rb.addWidget(self.roll)
         h.addRow(rb)
         self.ctl.addTab(ph, "水平/触发")
         # 光标
@@ -377,6 +380,12 @@ class CircuitPage(QtWidgets.QWidget):
         self.level.setSuffix(" " + unit_of(s.ch[s.trig.source - 1].source))
         if draw:
             self.redraw()
+
+    def _roll_mode(self, on):
+        self.scope.roll = on
+        if on and not self.run_btn.isChecked():
+            self.run_btn.setChecked(True)     # 滚动要配合连续刷新
+        self.redraw()
 
     def toggle_run(self, on):
         self.run_btn.setText("■ 停止" if on else "▶ 运行")
