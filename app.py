@@ -122,6 +122,19 @@ class InductionPage(QtWidgets.QWidget):
         sa.setFixedWidth(352); sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)   # 小窗口(如 1280×800)左侧栏可滚动，按钮/结果一定够得着
         lay.addWidget(sa)
 
+        # 改参数自动重算重播（防抖 1 s；重算先停回放、结果经事件队列延迟一帧再装载，均为仿真结果）
+        self.auto = QtWidgets.QCheckBox("改参数后自动重算并回放")
+        self.auto.setChecked(True)
+        left.addWidget(self.auto)
+        self._deb = QtCore.QTimer(self); self._deb.setSingleShot(True); self._deb.setInterval(1000)
+        self._deb.timeout.connect(self._auto_start)
+        self._pending = False
+        for wgt in list(self.e.values()) + [self.target, self.power, self.theat, self.mur, self.tdelay, self.tq, self.inner]:
+            wgt.valueChanged.connect(self._kick)
+        for wgt in (self.freq, self.mode, self.medium, self.conc):
+            wgt.currentIndexChanged.connect(self._kick)
+        self.nl.toggled.connect(self._kick)
+
         # ---------------- 右侧图
         self.tabs = QtWidgets.QTabWidget()
         from rw.gui_replay import QuenchReplay
@@ -131,6 +144,17 @@ class InductionPage(QtWidgets.QWidget):
         for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度"), ("mur", "磁导率分布")]:
             c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
         lay.addWidget(self.tabs, 1)
+
+    def _kick(self, *_):
+        if self.auto.isChecked() and getattr(self, "sim", None) is not None:
+            self._deb.start()           # 连改只在停手 1 s 后重算一次
+
+    def _auto_start(self):
+        if not self.btn.isEnabled():    # 上一次还在算：挂起，算完自动补跑
+            self._pending = True
+            return
+        self.status.setText("参数已改，自动重算中 …")
+        self.start()
 
     def params(self):
         geom = {k: self.e[k].value() for k in self.e}
@@ -144,6 +168,8 @@ class InductionPage(QtWidgets.QWidget):
             nonlinear=self.nl.isChecked() or self.conc.currentData() is not None, conc_key=self.conc.currentData())
 
     def start(self):
+        self.replay._pause()          # 重算期间停回放：结果到达与回放绘制不重叠
+        self._deb.stop()
         self.btn.setEnabled(False)
         self.th = QtCore.QThread()
         self.wk = Worker(self.params())
@@ -202,8 +228,15 @@ class InductionPage(QtWidgets.QWidget):
             c.fig.tight_layout()
             c.draw()
         if sim.frames:
-            self.replay.set_data(sim)
-            self.tabs.setCurrentWidget(self.replay)
+            # 延迟一帧再装载回放：让进行中的绘制先收尾，避免与重建立即重叠
+            QtCore.QTimer.singleShot(0, lambda s=sim: self._load_replay(s))
+        if self._pending:
+            self._pending = False
+            QtCore.QTimer.singleShot(0, self._auto_start)
+
+    def _load_replay(self, sim):
+        self.replay.set_data(sim)
+        self.tabs.setCurrentWidget(self.replay)
 
 
 class MainWindow(QtWidgets.QMainWindow):
