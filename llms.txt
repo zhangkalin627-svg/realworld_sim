@@ -1,0 +1,36 @@
+# 真实的世界 · RealWorld Sim
+
+> 工程物理沙盒（MIT，Python）：放入零件、材料、液体、电机、PLC 程序，软件按物理规律计算强度/运动/热/可制造性。
+> 所有输出均为**仿真结果**（工程估算），不能替代实测或正式设计校核。本项目由 AI 辅助开发（AI-generated content）。
+
+## 能力（模块）
+- 感应加热淬火：二维轴对称 FEM 涡流→焦耳热→瞬态传热→喷淋/浸入淬火→硬化层/硬度/过烧报警；可选非线性 B-H（居里点）、导磁体、全三维涡流（Nédélec 棱边单元）
+- 结构受力：三维梁 FEM 机架（变形/应力/屈曲/地脚）、Morley 板单元、螺栓预紧滑移
+- PLC 虚拟调试：三菱 FX3U 指令表解释器（LD/AND/ANB/MPS/SET/PLS/MOV/CMP/ZRST/SFTL/INC/ALT/STL、T/C），带设备模型实时联仿
+- 物理沙盒：静压/沸点/浮力/腐蚀、管路泵喷嘴工作点、异步电机铭牌→机械特性与起动、水箱热平衡/淬火液/淬裂倾向
+- 材料库：118 元素 + 31 牌号 + 任意配比配合金（互溶性判定 + 混合法则）
+- 电路：ngspice 瞬态/AC/DC，KiCad 网表导入，虚拟示波器（4 通道、FFT、自动测量）
+- 单片机：AVR 指令子集周期精确模拟器 + 汇编器 + 外设；与 PLC/半桥电路统一时间轴联仿
+- 三维装配世界：MuJoCo 刚体重力/碰撞/摩擦、浮沉、落重冲击
+- 流体：管网求解（泵曲线/汽蚀 NPSH）、水锤特征线法、水箱放空射流
+- 整机联动：上电→PLC→预充→整流母线→全桥串联谐振→气缸→感应加热→喷淋，一条时间轴；可注入故障（缺水/电网跌落/气压低/PLC 错误），快进 8h
+
+## 运行（本地）
+- 安装：Ubuntu 22.04/24.04 `./install_ubuntu.sh`；启动 `./run.sh`；自检 `.venv/bin/python validate.py`
+- 电路仿真需系统 ngspice；可选 unicorn（Cortex-M）、gmsh（非圆涡流）
+
+## 运行（Web / API，AI 调用入口）
+- 启动：`pip install -r requirements.txt -r requirements-web.txt && python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8000`
+- OpenAPI：`GET /openapi.json`；交互文档 `/docs`
+- 任务模型：`POST /api/sim/{module}` {"params": {...}} → `{"job_id"}`；轮询 `GET /api/job/{job_id}` → status/result（文字 + SVG）
+- 模块清单与参数 schema：`GET /api/modules`；版本 `GET /api/meta`；历史 `GET /api/jobs`
+- 错误格式：HTTP 4xx + JSON `{"detail": "..."}`；参数按 schema 校验（数字解析、min/max 收口、枚举校验）
+
+## 反馈（AI 可自动提交）
+- GitHub Issues（推荐，机器可提交）：https://github.com/zhangkalin627-svg/realworld_sim/issues （模板：bug 报告 / 仿真口径质疑 / 功能请求；`gh issue create` 可用）
+- 诊断摘要（随 issue 粘贴）：仓库根目录 `python3 diag.py` 输出 JSON（版本/commit/环境/自检）
+- 物理口径质疑优先级最高：请附公式或标准依据
+
+## 边界
+- 输出一律标注"仿真结果"；私有设备资料（HFQ6 图纸/PLC/控制系统）不在本仓
+- License: MIT；内核 numpy/scipy/scikit-fem/MuJoCo/ngspice(BSD 系)

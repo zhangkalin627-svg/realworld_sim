@@ -1,0 +1,14 @@
+name: 功能请求
+description: 想模拟什么、用在什么场景
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 想模拟的对象/现象
+    validations: {required: true}
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+    validations: {required: true}
