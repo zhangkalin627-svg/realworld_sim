@@ -12,12 +12,14 @@ fails = []
 wall = 3.0
 r10 = run_one(wall, 10.0, 2.6)
 r100 = run_one(wall, 100.0, 2.6)
-keys = ("T_surf", "aus_depth_mm", "aus1_depth_mm", "case_depth_mm", "HRC_surf", "verdict", "micro")
+keys = ("T_surf", "T_inner", "aus_depth_mm", "case_depth_mm", "HRC_surf", "verdict", "micro")
 print("10kHz:", {k: round(v, 2) if isinstance(v, float) else v for k, v in r10.items() if k in keys})
 print("100kHz:", {k: round(v, 2) if isinstance(v, float) else v for k, v in r100.items() if k in keys})
-# 物理：同功率同时间低频热得深（用 ≥Ac1 深度度量；10kHz 表面可能未达 Ac3，那是"欠热"判定的事）
-if not r10["aus1_depth_mm"] > r100["aus1_depth_mm"]:
-    fails.append(f"10kHz ≥Ac1 深度应比 100kHz 大: {r10['aus1_depth_mm']:.2f} vs {r100['aus1_depth_mm']:.2f}")
+# 物理：同功率同时间下频率越高表面-内壁温差越大（趋肤效应）。
+# 注意：3mm 薄壁+秒级加热时热传导已贯通整壁，"低频热得深"表现为温差小，而非内壁绝对温度高。
+g10 = r10["T_surf"] - r10["T_inner"]; g100 = r100["T_surf"] - r100["T_inner"]
+if not g100 > g10:
+    fails.append(f"100kHz 表里温差应更大: {g10:.0f} vs {g100:.0f}")
 
 r_short = run_one(wall, 30.0, 0.7)
 r_spr = run_one(wall, 30.0, 2.6)
