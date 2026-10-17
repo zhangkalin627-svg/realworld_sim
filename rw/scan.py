@@ -50,7 +50,7 @@ def run_one(wall, freq_khz, t_heat, medium="water_spray", power_kw=6.0, od=22.0)
     row = dict(
         wall_mm=wall, freq_kHz=freq_khz, t_heat_s=t_heat, medium=medium,
         medium_name=QUENCHANTS[medium]["name"],
-        T_surf=float(res["T_surf_end_heat"]), T_max=float(res["T_max"]),
+        T_surf=float(res["T_surf_end_heat"]), T_inner=float(res["T_inner_end_heat"]), T_max=float(res["T_max"]),
         aus_depth_mm=aus, aus1_depth_mm=aus1, case_depth_mm=float(res["case_depth_mm"]),
         HRC_surf=float(res["HRC_surface"]), through=bool(res["through_hardened"]),
         eff=float(res["efficiency"]), skin_hot_mm=float(res["skin_hot_mm"]),
