@@ -1,0 +1,47 @@
+/* realworld_sim 界面主题 token —— 结构相同，只换数值。用法：<html data-theme="dark|light|mono"> */
+:root, [data-theme="dark"] {
+  --bg-0:#090c11; --bg-1:#0e1319; --bg-2:#141a22; --bg-3:#1b232d;
+  --line:#242e3a; --line-strong:#33404f;
+  --text-1:#e8edf2; --text-2:#9aa7b4; --text-3:#66727e;
+  --accent:#5eb1ff; --accent-weak:rgba(94,177,255,.14);
+  --heat:#ff6a1f; --heat-hi:#ffb04a; --heat-glow:rgba(255,106,31,.35);
+  --ele-v:#f2cf4a; --ele-i:#4fe38a; --ele-p:#ff6a1f; --ele-f:#5eb1ff;
+  --ok:#4fe38a; --warn:#f2b84a; --danger:#ff5d5d;
+  --chart-grid:rgba(255,255,255,.06); --chart-1:#5eb1ff; --chart-2:#ff6a1f; --chart-3:#4fe38a; --chart-4:#f2cf4a; --chart-5:#b58cff;
+  --radius-s:6px; --radius-m:10px; --radius-l:14px;
+  --shadow-card:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.35);
+  --font-ui:"Inter","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-num:"JetBrains Mono","SF Mono","Consolas",monospace;
+  --fs-xs:11px; --fs-s:12px; --fs-m:14px; --fs-l:18px; --fs-xl:28px; --fs-hero:40px;
+  --fw-regular:400; --fw-medium:500; --fw-bold:650;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
+}
+[data-theme="light"] { /* 简约浅色 */
+  --bg-0:#f3f5f8; --bg-1:#ffffff; --bg-2:#f7f9fb; --bg-3:#eaeef3;
+  --line:#dde3ea; --line-strong:#c4ced9;
+  --text-1:#1b2430; --text-2:#56657a; --text-3:#8896a8;
+  --accent:#1f6feb; --accent-weak:rgba(31,111,235,.10);
+  --heat:#e04e0a; --heat-hi:#f08a1c; --heat-glow:rgba(224,78,10,.18);
+  --ele-v:#b8860b; --ele-i:#1a9a55; --ele-p:#e04e0a; --ele-f:#1f6feb;
+  --ok:#1a9a55; --warn:#b8860b; --danger:#d63a3a;
+  --chart-grid:rgba(0,0,0,.07); --chart-1:#1f6feb; --chart-2:#e04e0a; --chart-3:#1a9a55; --chart-4:#b8860b; --chart-5:#7b4fd6;
+  --shadow-card:0 1px 2px rgba(20,30,50,.06), 0 4px 14px rgba(20,30,50,.06);
+}
+[data-theme="mono"] { /* 黑白风：纯灰阶，靠明度与线型区分 */
+  --bg-0:#000000; --bg-1:#0a0a0a; --bg-2:#121212; --bg-3:#1c1c1c;
+  --line:#2a2a2a; --line-strong:#454545;
+  --text-1:#f2f2f2; --text-2:#a8a8a8; --text-3:#6e6e6e;
+  --accent:#ffffff; --accent-weak:rgba(255,255,255,.10);
+  --heat:#d9d9d9; --heat-hi:#ffffff; --heat-glow:rgba(255,255,255,.18);
+  --ele-v:#ffffff; --ele-i:#bdbdbd; --ele-p:#d9d9d9; --ele-f:#9a9a9a;
+  --ok:#e6e6e6; --warn:#bdbdbd; --danger:#ffffff;
+  --chart-grid:rgba(255,255,255,.08); --chart-1:#ffffff; --chart-2:#bdbdbd; --chart-3:#8a8a8a; --chart-4:#d9d9d9; --chart-5:#6a6a6a;
+  --shadow-card:none;
+}
+/* 基础组件示例（引用 token 即可） */
+.card{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-l);box-shadow:var(--shadow-card);padding:var(--sp-4)}
+.card-title{color:var(--text-2);font-size:var(--fs-s);font-weight:var(--fw-medium);letter-spacing:.02em}
+.kpi{font-family:var(--font-num);font-size:var(--fs-xl);font-weight:var(--fw-bold);color:var(--text-1)}
+.btn{background:var(--bg-3);color:var(--text-1);border:1px solid var(--line-strong);border-radius:var(--radius-s);padding:var(--sp-2) var(--sp-4);font-size:var(--fs-m)}
+.btn:hover{border-color:var(--accent)} .btn.primary{background:var(--accent);color:var(--bg-0);border-color:transparent}
+.tag-sim{color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:2px 10px;font-size:var(--fs-xs)}
