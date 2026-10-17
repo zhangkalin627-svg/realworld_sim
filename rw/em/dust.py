@@ -3,7 +3,7 @@
 ⚠ 简化动力学，演示趋势，不是时间预测：
 - 粒子过阻尼假设（微米级铁粉惯性可忽略）：v = v_空气 + F_磁/(6πηr)（限速）+ 重力沉降
 - 磁力用饱和偶极量级 F = V·Ms·∇B，B 场来自轴对称涡流求解（同一材料求解一次，稳态）
-- 粘附：粒子进入导磁体表面即粘；吹扫：局部空气拖曳力 > 磁保持力时释放
+- 粘附：粒子落到导磁体表面或线圈内壁即粘（水平过环工况，现场视频校准）；吹扫：局部空气拖曳力 > 磁保持力时释放
 - 拉弧风险 = (最大堆积厚度/临界厚度) × (单匝电压/参考电压) 的定性分级，不可解击穿过程
 """
 import numpy as np
@@ -114,7 +114,7 @@ class DustSim:
         near = np.exp(-np.maximum(pts[:, 0] - g.ro, 0) / 6.0)
         v[:, 0] += 0.6 * near                         # 热羽流：径向推离工件
         zmid = 0.5 * (g.coil_z0 + g.coil_z1)
-        v[:, 1] += 0.25 * np.sign(pts[:, 1] - zmid) * near   # 被拖向端面外
+        v[:, 1] += 0.25 * np.sign(pts[:, 1] - zmid) * near   # 棒料连续进给拖动空气沿轴向端面外
         if blow:
             band = (pts[:, 1] > g.coil_z0 - 8) & (pts[:, 1] < g.coil_z1 + 8) & (pts[:, 0] > g.ro)
             v[band, 0] += 60.0                        # 工业风枪射流 ~60 m/s（0.4-0.6 MPa 喷嘴近场）
@@ -147,14 +147,17 @@ class DustSim:
             v_term = np.minimum(F / (6 * np.pi * ETA_AIR * self.r_p), 1.5)
             v = self.air_velocity(self.pos, blow)
             v += d * v_term[:, None]
-            v[:, 1] -= self.m_p * G / (6 * np.pi * ETA_AIR * self.r_p)   # 重力沉降终端速度
+            # 重力：现场视频校准(2026-10-17 立式转 horizontal 通过式)：工件水平连续过环，
+            # 重力 ⊥ 工件轴。取底侧半平面建模：氧化皮从棒料底面剥落，重力沿 +r（落向线圈/导磁体底侧）。
+            v[:, 0] += self.m_p * G / (6 * np.pi * ETA_AIR * self.r_p)   # 重力沉降终端速度（径向）
             disp = v * h * 1e3                                # → mm
             L = np.hypot(disp[:, 0], disp[:, 1])
             cap = L > 0.4
             disp[cap] *= (0.4 / L[cap])[:, None]               # 子步位移上限 0.4 mm
             self.pos = self.pos + disp
-            # 碰撞：导磁体→粘附（吹扫时粘不上，直接被射流带走）；线圈/工件→移除；出界→移除
-            mc = self.in_conc(self.pos)
+            # 碰撞：导磁体/线圈内壁→粘附（现场视频：水平过环，氧化皮下落直接积在线圈内壁
+            # 与导磁体底侧，二者都是积灰面；吹扫时粘不上，直接被射流带走）；工件→移除；出界→移除
+            mc = self.in_conc(self.pos) | self.in_coil(self.pos)
             if blow and mc.any():
                 self.pos = self.pos[~mc]              # 吹扫时打到导磁体的粒子视为被带走
                 mc = np.zeros(len(self.pos), bool)
@@ -164,7 +167,7 @@ class DustSim:
                     key = (round(float(p[0]), 1), round(float(p[1]), 1))
                     self.seg_count[key] = self.seg_count.get(key, 0) + 1
             keep = ~mc
-            bad = self.in_coil(self.pos) | self.in_steel(self.pos)
+            bad = self.in_steel(self.pos)
             r0, r1, z0, z1 = self.bounds
             out = (self.pos[:, 0] < r0) | (self.pos[:, 0] > r1) | (self.pos[:, 1] < z0) | (self.pos[:, 1] > z1)
             self.pos = self.pos[keep & ~bad & ~out]

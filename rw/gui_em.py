@@ -117,7 +117,7 @@ class EMPage(QtWidgets.QWidget):
         self.c_dust = _Canvas(); l3.addWidget(self.c_dust, 1)
         note = QtWidgets.QLabel(
             "仿真结果 · 简化动力学（演示趋势，不是拉弧时间预测）：粒子过阻尼，磁力=该材料一次电磁求解的场梯度×饱和偶极量级，"
-            "另加热羽流/重力/空气阻力；粉尘按氧化铁皮磁化强度，非纯铁；拉弧风险=(最大层厚/200µm)×(单匝电压/50V) 的定性分级。"
+            "另加热羽流/重力/空气阻力；粉尘按氧化铁皮磁化强度，非纯铁；拉弧风险=(最大层厚/200µm)×(单匝电压/50V) 的定性分级；积灰面=线圈内壁+导磁体（水平过环工况，2026-10-17 现场视频校准）。"
             "现场视频/实测到了可校准参数。")
         note.setWordWrap(True); l3.addWidget(note)
         self.tabs.addTab(w3, "粉尘/拉弧动画")
