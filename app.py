@@ -539,16 +539,17 @@ def main():
                     poll.start(500)
                 else:
                     QtCore.QTimer.singleShot(1500, lambda: (w.grab().save(out), app.quit()))
-        elif which == "scan":
-            # 扫描页自测截图：小网格跑一遍真实扫描
-            w.ind._scan_grid = ((30.0, 100.0), (0.7, 1.5))
+        elif which in ("scan", "scanfull"):
+            # 扫描页自测截图：scan=2x2 小网格冒烟；scanfull=真 15 点全网格
+            if which == "scan":
+                w.ind._scan_grid = ((30.0, 100.0), (0.7, 1.5))
             w.ind.tabs.setCurrentIndex(w.ind.tabs.count() - 1)
             w.ind.start_scan()
             pg = w.ind
             poll = QtCore.QTimer(w)
             poll.timeout.connect(lambda: (poll.stop(), QtCore.QTimer.singleShot(500, lambda: (w.grab().save(out), app.quit()))) if pg.btn_scan.isEnabled() else None)
             poll.start(1000)
-            QtCore.QTimer.singleShot(300000, lambda: (w.grab().save(out), app.quit()))
+            QtCore.QTimer.singleShot(900000 if which == "scanfull" else 300000, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("flow"):
             # flow0 管网 flow1 水锤 flow2 放空+射流
             sub = int(which[4:]) if which[4:].isdigit() else 0
