@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>100 kW 高频淬火电源 · 过居里点追频 — realworld_sim 演示原型 v1</title>
+<style>
+:root{
+  --bg:#0b0f14; --bg2:#0f141a; --card:#151b23; --card2:#1a222c; --line:#232d38;
+  --txt:#e8edf2; --dim:#8b98a5; --heat:#ff4d00; --heat2:#ffd166; --ele:#ffe14d; --cur:#4dff88;
+  --ok:#4dff88; --warn:#ff5555; --accent:#5eb1ff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;padding:18px 22px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.top h1{font-size:19px;font-weight:600}
+.badge{background:#3a2b12;color:var(--heat2);border:1px solid #6b511c;border-radius:999px;padding:2px 12px;font-size:12px}
+.badge.b2{background:#12283a;color:var(--accent);border-color:#1d4462}
+.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.card .k{color:var(--dim);font-size:12px}
+.card .v{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.card .u{font-size:12px;color:var(--dim);font-weight:400}
+.grid{display:grid;grid-template-columns:1.15fr 1fr;gap:12px;margin-bottom:12px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.panel h2{font-size:13px;color:var(--dim);font-weight:500;margin-bottom:10px}
+.flow{display:flex;align-items:center;gap:0;margin:8px 0 4px}
+.fblock{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 6px;text-align:center;font-size:12px;flex:1;transition:box-shadow .3s,border-color .3s}
+.fblock .sub{color:var(--dim);font-size:10px;display:block}
+.fblock.on{border-color:var(--heat);box-shadow:0 0 14px #ff4d0033}
+.wire{width:26px;height:3px;background:linear-gradient(90deg,var(--ele) 50%,transparent 0) 0 0/12px 100%;animation:flow 1s linear infinite;flex:none}
+@keyframes flow{to{background-position:12px 0}}
+#workpiece{position:relative;height:64px;border-radius:10px;background:#3a3f46;border:1px solid var(--line);overflow:hidden;margin-top:6px}
+#wpcore{position:absolute;inset:0;transition:background .2s}
+#coilmark{position:absolute;top:-8px;bottom:-8px;left:44%;width:12%;border:2px solid var(--ele);border-radius:6px;pointer-events:none}
+#wpT{position:absolute;right:10px;top:6px;font-size:12px;color:#fff;text-shadow:0 1px 3px #000}
+.legend{display:flex;gap:14px;color:var(--dim);font-size:11px;margin-top:8px;flex-wrap:wrap}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+canvas{width:100%;display:block}
+.ctrl{display:flex;align-items:center;gap:12px;margin-bottom:12px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+button{background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 16px;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+input[type=range]{flex:1;accent-color:var(--heat)}
+.foot{color:var(--dim);font-size:11.5px;border-top:1px solid var(--line);padding-top:10px}
+#statev{font-size:15px;font-weight:600}
+.sq{stroke:var(--ele);fill:none;stroke-width:1.6}
+.si{stroke:var(--cur);fill:none;stroke-width:1.6}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>100 kW 高频淬火电源 · 过居里点追频</h1>
+  <span class="badge">仿真结果</span>
+  <span class="badge b2">realworld_sim 演示原型 v1</span>
+</div>
+<div class="cards">
+  <div class="card"><div class="k">工件温度</div><div class="v" id="vT">--<span class="u"> °C</span></div></div>
+  <div class="card"><div class="k">工作频率</div><div class="v" id="vF">--<span class="u"> kHz</span></div></div>
+  <div class="card"><div class="k">输出功率</div><div class="v" id="vP">--<span class="u"> kW</span></div></div>
+  <div class="card"><div class="k">相位（电流滞后）</div><div class="v" id="vPhi">--<span class="u"> °</span></div></div>
+  <div class="card"><div class="k">状态</div><div class="v" id="statev" style="font-size:15px;padding-top:4px">--</div></div>
+</div>
+<div class="ctrl">
+  <button id="play">⏸ 暂停</button>
+  <button class="spd" data-s="1">1×</button><button class="spd" data-s="8">8×</button><button class="spd on" data-s="30">30×</button>
+  <input type="range" id="seek" min="0" max="1000" value="0">
+  <span id="tshow" style="color:var(--dim);font-size:12px;min-width:52px">0.00 s</span>
+</div>
+<div class="grid">
+  <div class="panel">
+    <h2>能量流（流速∝功率）</h2>
+    <div class="flow">
+      <div class="fblock" id="b0">电网<span class="sub">三相 380 V</span></div><div class="wire"></div>
+      <div class="fblock" id="b1">整流母线<span class="sub">直流 560 V</span></div><div class="wire"></div>
+      <div class="fblock" id="b2">IGBT 逆变<span class="sub" id="sw">-- kHz</span></div><div class="wire"></div>
+      <div class="fblock" id="b3">谐振槽路<span class="sub">L·C</span></div><div class="wire"></div>
+      <div class="fblock" id="b4">淬火变压器<span class="sub">大电流</span></div><div class="wire"></div>
+      <div class="fblock" id="b5">感应线圈<span class="sub" id="vI">-- A</span></div><div class="wire"></div>
+      <div class="fblock" id="b6">工件<span class="sub">45 钢</span></div>
+    </div>
+    <h2 style="margin-top:14px">工件表面（45 钢轴，随温度变色）</h2>
+    <div id="workpiece"><div id="wpcore"></div><div id="coilmark"></div><div id="wpT"></div></div>
+    <div class="legend">
+      <span><span class="dot" style="background:#6b7280"></span>常温</span>
+      <span><span class="dot" style="background:#b91c1c"></span>约 600 °C</span>
+      <span><span class="dot" style="background:#dc2626"></span>770 °C 居里点</span>
+      <span><span class="dot" style="background:var(--heat)"></span>约 1000 °C</span>
+      <span>颜色只示意温度高低，不能当测温依据</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>逆变输出波形（示意：方波电压 / 正弦电流，相位与频率取自仿真结果）</h2>
+    <canvas id="scope" height="150"></canvas>
+    <div class="legend"><span><span class="dot" style="background:var(--ele)"></span>电压</span><span><span class="dot" style="background:var(--cur)"></span>线圈电流（滞后 φ）</span></div>
+    <h2 style="margin-top:12px">说明</h2>
+    <div style="font-size:12.5px;color:var(--dim)" id="story">扫频捕获中…</div>
+  </div>
+</div>
+<div class="grid" style="grid-template-columns:1fr 1fr">
+  <div class="panel"><h2>频率 f(t)（kHz）— 仿真结果</h2><canvas id="cF" height="170"></canvas></div>
+  <div class="panel"><h2>输出功率 P(t)（kW）— 仿真结果</h2><canvas id="cP" height="170"></canvas></div>
+</div>
+<div class="foot">
+  数据：realworld_sim · rw.machine 固件在环（FWLoop）场景 B「居里跟踪」，工件 20→900 °C/3 s，固件指令级 PLL，相位目标 0.22 rad，m=1 定压。全部数值为仿真结果，未经实测。波形区为按当前频率/相位重画的示意波形。模型口径：谐振点随温度 28.4→28.9 kHz（电感 46.9→45.3 µH），过居里点工件电阻大降、Q 升高，频率下限 30 kHz 钳位。
+</div>
+<script>
+const D = [[0.0033,45454.5,1.04,64.6,19995.8,21.0],[0.0121,44601.6,1.0177,66.6,21397.2,23.5],[0.021,43158.8,0.9781,70.4,24039.9,26.2],[0.0303,41698.2,0.9324,74.7,27187.7,28.9],[0.04,40344.7,0.8838,79.0,30611.6,31.7],[0.0499,39027.2,0.8293,83.5,34484.2,34.6],[0.0602,37825.6,0.7721,88.0,38522.3,37.6],[0.0708,36688.7,0.7111,92.4,42798.2,40.8],[0.0817,35608.6,0.6455,96.8,47238.1,44.0],[0.0929,34601.3,0.5771,100.8,51632.1,47.3],[0.1045,33738.1,0.5119,104.1,55453.2,50.6],[0.1163,33027.9,0.4537,106.5,58509.3,54.1],[0.1283,32451.6,0.4033,108.2,60823.0,57.6],[0.1406,32019.9,0.3635,109.2,62360.2,61.2],[0.1529,31708.4,0.3334,109.6,63286.6,64.9],[0.1654,31462.1,0.3088,109.7,63848.6,68.5],[0.178,31253.4,0.2876,109.6,64241.5,72.2],[0.1906,31116.1,0.2729,109.3,64314.0,75.9],[0.2033,30990.2,0.2593,108.9,64325.2,79.6],[0.216,30905.2,0.2496,108.4,64190.7,83.4],[0.2288,30845.3,0.2425,107.9,64004.2,87.1],[0.2416,30785.9,0.2353,107.3,63783.2,90.9],[0.2544,30757.5,0.2311,106.7,63474.0,94.6],[0.2672,30732.7,0.2273,106.1,63158.7,98.4],[0.28,30715.2,0.2243,105.4,62828.1,102.1],[0.2929,30702.6,0.2218,104.9,62517.7,105.9],[0.3057,30677.3,0.2181,104.3,62215.8,109.7],[0.3186,30683.1,0.2173,103.6,61841.1,113.4],[0.3314,30688.4,0.2164,103.0,61473.9,117.2],[0.3442,30693.5,0.2156,102.4,61114.0,121.0],[0.3571,30698.2,0.2147,101.8,60761.1,124.7],[0.3699,30673.2,0.2113,101.3,60508.7,128.5],[0.3827,30681.3,0.2108,100.7,60158.7,132.3],[0.3956,30696.9,0.211,100.1,59797.6,136.0],[0.4084,30713.0,0.2112,99.5,59441.8,139.8],[0.4212,30719.7,0.2106,98.9,59112.7,143.6],[0.4341,30754.4,0.2124,98.3,58728.1,147.3],[0.4469,30752.8,0.2112,97.8,58451.5,151.1],[0.4597,30769.1,0.2114,97.3,58118.1,154.8],[0.4725,30790.0,0.212,96.7,57780.4,158.6],[0.4853,30792.0,0.2111,96.2,57487.4,162.3],[0.4981,30800.8,0.2107,95.7,57185.1,166.1],[0.5108,30816.0,0.211,95.2,56895.7,169.8],[0.5236,30836.8,0.2116,94.7,56578.3,173.6],[0.5364,30847.1,0.2114,94.2,56286.8,177.3],[0.5492,30863.4,0.2116,93.7,55987.8,181.1],[0.5619,30886.1,0.2125,93.2,55701.0,184.8],[0.5747,30909.6,0.2133,92.7,55396.9,188.6],[0.5874,30913.3,0.2126,92.3,55135.3,192.3],[0.6002,30914.2,0.2116,91.9,54883.0,196.0],[0.6129,30925.6,0.2116,91.4,54633.0,199.8],[0.6256,30941.1,0.2117,90.9,54318.2,203.5],[0.6384,30964.4,0.2123,90.4,53988.2,207.3],[0.6511,30980.6,0.2124,89.8,53676.7,211.0],[0.6638,30988.6,0.2119,89.4,53406.3,214.7],[0.6765,31014.6,0.2128,88.9,53087.2,218.4],[0.6892,31048.4,0.2142,88.3,52759.7,222.2],[0.7019,31033.6,0.2121,87.9,52542.0,225.9],[0.7146,31064.3,0.2133,87.4,52229.5,229.6],[0.7273,31081.0,0.2134,87.0,51945.6,233.3],[0.7399,31095.3,0.2135,86.5,51689.6,237.0],[0.7526,31119.5,0.2142,86.1,51401.8,240.8],[0.7653,31130.8,0.2139,85.6,51139.6,244.5],[0.7779,31149.2,0.2143,85.2,50888.2,248.2],[0.7906,31146.3,0.213,84.8,50656.5,251.9],[0.8032,31166.2,0.2134,84.4,50391.9,255.6],[0.8158,31180.0,0.2135,84.0,50158.1,259.3],[0.8285,31204.5,0.2142,83.5,49893.7,263.0],[0.8411,31231.3,0.2151,83.1,49629.5,266.7],[0.8537,31241.3,0.2149,82.8,49411.6,270.4],[0.8663,31250.0,0.2145,82.4,49182.2,274.1],[0.8789,31263.7,0.2146,82.0,48964.5,277.8],[0.8915,31292.6,0.2156,81.6,48710.8,281.5],[0.9041,31290.5,0.2145,81.2,48506.9,285.2],[0.9167,31309.4,0.2149,80.9,48290.1,288.9],[0.9293,31315.7,0.2144,80.5,48079.1,292.6],[0.9419,31341.7,0.2153,80.2,47857.8,296.3],[0.9544,31356.7,0.2154,79.8,47639.9,300.0],[0.967,31365.5,0.2152,79.5,47448.4,303.7],[0.9796,31373.0,0.2147,79.1,47246.4,307.3],[0.9921,31398.1,0.2155,78.8,47022.4,311.0],[1.0047,31405.8,0.2152,78.5,46839.8,314.7],[1.0172,31411.1,0.2147,78.1,46648.3,318.4],[1.0297,31425.7,0.2148,77.8,46460.6,322.1],[1.0423,31455.5,0.2159,77.5,46240.9,325.7],[1.0548,31475.3,0.2164,77.2,46050.8,329.4],[1.0673,31482.9,0.216,76.8,45865.7,333.1],[1.0798,31487.8,0.2155,76.5,45699.6,336.7],[1.0923,31517.3,0.2166,76.2,45490.1,340.4],[1.1048,31519.8,0.216,75.9,45331.1,344.1],[1.1173,31522.8,0.2153,75.6,45160.4,347.7],[1.1298,31532.9,0.2152,75.4,44995.0,351.4],[1.1423,31567.0,0.2165,75.0,44788.9,355.1],[1.1548,31578.0,0.2165,74.8,44626.5,358.7],[1.1673,31584.0,0.216,74.5,44459.8,362.4],[1.1797,31612.8,0.2171,74.2,44278.8,366.1],[1.1922,31607.5,0.216,73.9,44129.7,369.7],[1.2046,31636.4,0.217,73.6,43952.5,373.4],[1.2171,31646.9,0.2169,73.4,43787.7,377.0],[1.2295,31645.7,0.2161,73.1,43650.2,380.7],[1.242,31664.3,0.2165,72.9,43490.5,384.3],[1.2544,31700.2,0.2179,72.6,43300.8,388.0],[1.2669,31704.6,0.2175,72.3,43161.3,391.6],[1.2793,31729.1,0.2182,72.0,42988.7,395.3],[1.2917,31735.4,0.2179,71.8,42850.0,398.9],[1.3041,31746.0,0.2176,71.5,42673.8,402.5],[1.3165,31756.0,0.2174,71.2,42502.0,406.2],[1.3289,31768.0,0.2172,70.9,42329.9,409.8],[1.3413,31780.7,0.2171,70.6,42146.1,413.5],[1.3537,31822.4,0.2187,70.3,41945.3,417.1],[1.3661,31808.5,0.2169,70.0,41795.5,420.7],[1.3785,31845.1,0.2183,69.7,41604.9,424.4],[1.3908,31842.1,0.2173,69.5,41459.4,428.0],[1.4032,31886.9,0.219,69.2,41252.1,431.6],[1.4156,31878.7,0.2177,68.9,41115.8,435.2],[1.4279,31902.1,0.2182,68.6,40947.7,438.9],[1.4403,31901.5,0.2173,68.4,40794.7,442.5],[1.4526,31904.1,0.2167,68.1,40651.8,446.1],[1.465,31905.6,0.216,67.9,40511.5,449.7],[1.4773,31932.6,0.2167,67.6,40335.5,453.3],[1.4896,31926.9,0.2156,67.3,40205.7,457.0],[1.502,31924.9,0.2147,67.1,40073.4,460.6],[1.5143,31918.2,0.2135,66.9,39936.0,464.2],[1.5267,31915.7,0.2126,66.6,39806.9,467.8],[1.539,31942.1,0.2133,66.4,39651.2,471.4],[1.5513,31939.2,0.2124,66.1,39514.5,475.1],[1.5637,31935.0,0.2114,65.9,39391.1,478.7],[1.576,31929.8,0.2103,65.7,39259.2,482.3],[1.5884,31926.6,0.2095,65.5,39137.1,485.9],[1.6007,31921.2,0.2085,65.3,39018.2,489.5],[1.613,31918.1,0.2075,65.0,38888.1,493.2],[1.6254,31945.5,0.2083,64.8,38742.1,496.8],[1.6377,31939.7,0.2073,64.6,38627.1,500.4],[1.65,31946.2,0.207,64.4,38492.4,504.0],[1.6624,31968.0,0.2075,64.1,38355.6,507.6],[1.6747,32002.5,0.2087,63.9,38208.9,511.2],[1.687,31989.8,0.2073,63.7,38104.7,514.9],[1.6993,32032.5,0.2089,63.5,37944.3,518.5],[1.7116,32041.2,0.2087,63.3,37824.0,522.1],[1.7239,32042.5,0.2081,63.1,37711.2,525.7],[1.7362,32044.3,0.2075,62.9,37589.6,529.3],[1.7485,32064.7,0.2079,62.6,37462.9,532.9],[1.7608,32085.0,0.2084,62.4,37337.5,536.5],[1.773,32104.0,0.2087,62.2,37205.4,540.1],[1.7853,32115.8,0.2087,62.0,37089.4,543.7],[1.7976,32121.0,0.2083,61.8,36979.7,547.3],[1.8098,32127.6,0.208,61.7,36869.9,550.9],[1.8221,32147.5,0.2084,61.4,36741.9,554.5],[1.8343,32166.1,0.2087,61.3,36624.6,558.1],[1.8466,32170.9,0.2084,61.1,36519.4,561.7],[1.8588,32193.8,0.2089,60.9,36400.7,565.3],[1.8711,32207.4,0.209,60.7,36282.2,568.8],[1.8833,32237.3,0.2099,60.5,36160.2,572.4],[1.8955,32226.7,0.2087,60.3,36070.8,576.0],[1.9077,32235.5,0.2086,60.2,35967.1,579.6],[1.9199,32258.0,0.2091,60.0,35853.8,583.2],[1.9322,32266.1,0.2089,59.8,35744.5,586.8],[1.9444,32302.4,0.2101,59.6,35622.8,590.3],[1.9566,32314.6,0.2101,59.4,35520.3,593.9],[1.9688,32337.9,0.2107,59.3,35410.2,597.5],[1.9809,32337.5,0.2101,59.1,35321.6,601.1],[1.9931,32335.7,0.2095,58.9,35237.5,604.6],[2.0053,32362.3,0.2103,58.8,35139.6,608.2],[2.0175,32381.6,0.2108,58.6,35047.7,611.8],[2.0296,32369.9,0.2097,58.5,34979.2,615.4],[2.0418,32406.1,0.211,58.4,34876.2,618.9],[2.054,32413.7,0.2109,58.2,34794.8,622.5],[2.0661,32427.0,0.211,58.1,34703.6,626.1],[2.0783,32441.9,0.2112,57.9,34618.1,629.6],[2.0904,32455.6,0.2114,57.8,34534.0,633.2],[2.1026,32452.1,0.2107,57.7,34462.8,636.8],[2.1147,32454.3,0.2104,57.5,34387.9,640.3],[2.1269,32457.7,0.2101,57.4,34312.8,643.9],[2.139,32501.9,0.2117,57.3,34209.6,647.4],[2.1511,32500.5,0.212,57.4,34312.9,651.0],[2.1632,32500.5,0.2151,58.5,34919.0,654.5],[2.1754,32500.5,0.2182,59.6,35554.0,658.1],[2.1875,32500.5,0.2216,60.8,36220.2,661.7],[2.1996,32501.4,0.2252,62.0,36919.0,665.2],[2.2117,32489.4,0.2283,63.3,37665.3,668.8],[2.2239,32463.3,0.2309,64.7,38465.3,672.3],[2.236,32409.7,0.2325,66.3,39408.5,675.9],[2.2482,32396.6,0.2361,67.8,40293.3,679.5],[2.2604,32338.6,0.2375,69.5,41281.6,683.0],[2.2725,32302.4,0.2403,71.3,42306.0,686.6],[2.2848,32250.7,0.2423,73.2,43415.9,690.2],[2.297,32207.3,0.2451,75.2,44589.0,693.8],[2.3092,32149.5,0.2477,77.6,45967.3,697.4],[2.3215,32067.3,0.2485,80.0,47386.2,701.0],[2.3338,32003.2,0.2508,82.6,48899.9,704.6],[2.3461,31926.5,0.253,85.7,50688.0,708.2],[2.3585,31832.6,0.2537,88.8,52526.9,711.8],[2.3709,31761.8,0.2562,92.1,54478.0,715.5],[2.3833,31682.2,0.2591,96.1,56797.0,719.1],[2.3958,31579.7,0.2597,100.3,59225.3,722.8],[2.4083,31487.2,0.2623,105.2,62082.8,726.4],[2.4208,31404.5,0.2652,110.2,65002.0,730.1],[2.4334,31318.6,0.2692,116.3,68515.3,733.8],[2.446,31196.3,0.2691,122.8,72325.6,737.5],[2.4586,31101.3,0.2732,130.5,76825.0,741.2],[2.4713,30994.3,0.2765,139.5,82014.7,744.9],[2.4841,30882.9,0.2797,149.8,87988.3,748.7],[2.4968,30742.4,0.2779,161.0,94597.2,752.4],[2.5097,30635.7,0.2819,174.5,102444.0,756.2],[2.5226,30502.3,0.2812,190.0,111576.0,760.0],[2.5355,30377.4,0.2792,206.7,121437.3,763.8],[2.5485,30270.2,0.2751,222.3,130765.0,767.6],[2.5616,30162.1,0.2586,229.4,135547.7,771.4],[2.5746,30065.1,0.239,230.3,136772.2,775.2],[2.5878,30025.5,0.2308,230.6,137175.7,779.1],[2.6009,29998.4,0.2251,230.6,137403.1,782.9],[2.614,29991.9,0.2236,230.5,137356.8,786.8],[2.6272,29986.3,0.2222,230.3,137306.7,790.6],[2.6403,30007.6,0.2263,229.9,136917.6,794.5],[2.6534,30003.0,0.2252,229.7,136856.0,798.3],[2.6666,29996.3,0.2236,229.6,136843.4,802.2],[2.6797,29990.2,0.2223,229.6,136839.4,806.0],[2.6928,29985.4,0.2212,229.5,136819.9,809.9],[2.706,30007.1,0.2254,229.1,136469.4,813.8],[2.7191,30002.8,0.2244,229.0,136439.1,817.6],[2.7323,29996.1,0.2229,228.9,136443.6,821.5],[2.7454,29990.2,0.2216,228.8,136438.9,825.3],[2.7585,29985.4,0.2205,228.8,136419.1,829.2],[2.7717,30007.1,0.2247,228.4,136071.6,833.0],[2.7848,30002.8,0.2237,228.3,136047.4,836.9],[2.7979,29996.1,0.2222,228.2,136051.8,840.7],[2.8111,29988.5,0.2206,228.2,136061.3,844.6],[2.8242,29984.5,0.2196,228.1,136032.0,848.4],[2.8373,30006.7,0.2239,227.7,135682.7,852.3],[2.8505,30001.4,0.2227,227.6,135670.7,856.1],[2.8636,29995.4,0.2214,227.5,135666.6,860.0],[2.8767,29988.1,0.2198,227.5,135677.5,863.8],[2.8899,29984.3,0.2189,227.4,135646.2,867.7],[2.903,30006.6,0.2232,227.0,135292.9,871.6],[2.9162,30001.3,0.222,226.9,135280.3,875.4],[2.9293,29995.4,0.2207,226.9,135276.0,879.3],[2.9424,29988.1,0.2191,226.8,135286.6,883.1],[2.9556,29984.3,0.2182,226.7,135255.5,887.0],[2.9687,30006.6,0.2225,226.3,134911.1,890.8],[2.9818,29999.9,0.2211,226.3,134916.1,894.7],[2.995,29994.6,0.2199,226.2,134903.3,898.5]];
+const T_END = 3.0, CURIE_T = 770;
+let t = 0, playing = true, speed = 30, last = performance.now();
+const $ = id => document.getElementById(id);
+function interp(tt){
+  if (tt <= D[0][0]) return D[0];
+  for (let i=1;i<D.length;i++) if (D[i][0] >= tt){
+    const a=D[i-1], b=D[i], r=(tt-a[0])/(b[0]-a[0]);
+    return a.map((v,j)=>v+(b[j]-v)*r);
+  }
+  return D[D.length-1];
+}
+function wpColor(T){
+  const stops=[[20,0x4b,0x52,0x59],[600,0xb9,0x1c,0x1c],[770,0xdc,0x26,0x26],[1000,0xff,0x4d,0x00],[1150,0xff,0xd1,0x66]];
+  for(let i=1;i<stops.length;i++) if(T<=stops[i][0]){
+    const a=stops[i-1],b=stops[i],r=(T-a[0])/(b[0]-a[0]);
+    const c=a.slice(1).map((v,j)=>Math.round(v+(b[j+1]-v)*r));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  return "rgb(255,209,102)";
+}
+function state(t,T){
+  if (t < 0.226) return ["扫频捕获","从 45 kHz 往下扫，找谐振点"];
+  if (T < 650)  return ["锁定 · 跟踪","已锁定，相位保持 0.22 rad（约 12.6°，感性区）"];
+  if (T < CURIE_T) return ["接近居里点","工件电阻开始降，功率抬头"];
+  return ["过居里点 · 热态","磁性消失，谐振点上移，频率到下限 30 kHz 钳位，电流功率大增"];
+}
+function drawCurve(cv, getv, ymin, ymax, color, tt){
+  const c = cv.getContext("2d"), W = cv.width = cv.clientWidth*2, H = cv.height = 340;
+  c.clearRect(0,0,W,H);
+  c.strokeStyle="#232d38"; c.lineWidth=1;
+  for(let i=1;i<4;i++){c.beginPath();c.moveTo(0,H*i/4);c.lineTo(W,H*i/4);c.stroke();}
+  const X=t=>t/T_END*W, Y=v=>H-(v-ymin)/(ymax-ymin)*(H-20)-10;
+  // 全曲线（暗）
+  c.strokeStyle=color+"44"; c.lineWidth=3; c.beginPath();
+  D.forEach((d,i)=>{const x=X(d[0]),y=Y(getv(d)); i?c.lineTo(x,y):c.moveTo(x,y);}); c.stroke();
+  // 已走过（亮）
+  c.strokeStyle=color; c.lineWidth=3.5; c.beginPath();
+  let started=false;
+  D.forEach(d=>{ if(d[0]>tt) return; const x=X(d[0]),y=Y(getv(d)); started?c.lineTo(x,y):(c.moveTo(x,y),started=true);}); c.stroke();
+  // 游标
+  c.strokeStyle="#e8edf2"; c.lineWidth=1.5; c.setLineDash([5,5]);
+  c.beginPath(); c.moveTo(X(tt),0); c.lineTo(X(tt),H); c.stroke(); c.setLineDash([]);
+}
+function drawScope(f, phi, I){
+  const cv=$("scope"), c=cv.getContext("2d"), W=cv.width=cv.clientWidth*2, H=cv.height=300;
+  c.clearRect(0,0,W,H);
+  const per=W/3; // 三个周期
+  c.strokeStyle="#232d38";c.beginPath();c.moveTo(0,H/2);c.lineTo(W,H/2);c.stroke();
+  // 方波电压
+  c.strokeStyle=getComputedStyle(document.body).getPropertyValue("--ele"); c.lineWidth=3;
+  c.beginPath();
+  for(let x=0;x<=W;x++){const ph=(x/per)%1; const y=(ph<0.5)?H*0.2:H*0.8; x?c.lineTo(x,y):c.moveTo(x,y);} c.stroke();
+  // 正弦电流滞后 phi
+  c.strokeStyle=getComputedStyle(document.body).getPropertyValue("--cur");
+  c.beginPath();
+  const amp=Math.min(H*0.32, 40+I*0.8);
+  for(let x=0;x<=W;x++){const ph=x/per*2*Math.PI; const y=H/2 - Math.sin(ph-phi)*amp; x?c.lineTo(x,y):c.moveTo(x,y);} c.stroke();
+}
+function render(){
+  const d = interp(t), f=d[1], phi=d[2], I=d[3], P=d[4], T=d[5];
+  $("vT").innerHTML = T.toFixed(0)+'<span class="u"> °C</span>';
+  $("vF").innerHTML = (f/1000).toFixed(2)+'<span class="u"> kHz</span>';
+  $("vP").innerHTML = (P/1000).toFixed(1)+'<span class="u"> kW</span>';
+  $("vPhi").innerHTML = (phi*180/Math.PI).toFixed(1)+'<span class="u"> °</span>';
+  const [s, desc] = state(t,T);
+  $("statev").textContent = s;
+  $("statev").style.color = s.includes("居里")||s.includes("热态") ? "var(--heat2)" : (s.includes("扫频")?"var(--accent)":"var(--ok)");
+  $("story").textContent = desc + "。f0(T) 28.4→28.9 kHz（仿真结果）。";
+  $("sw").textContent = (f/1000).toFixed(1)+" kHz";
+  $("vI").textContent = I.toFixed(0)+" A";
+  ["b2","b3","b4","b5"].forEach(id=>$(id).classList.add("on"));
+  $("b6").classList.toggle("on", T>600);
+  document.querySelectorAll(".wire").forEach(w=>{ w.style.animationDuration = Math.max(0.15, 1.2 - P/140000)+"s"; });
+  $("wpcore").style.background = `linear-gradient(90deg, ${wpColor(Math.max(20,T-150))}, ${wpColor(T)} 45%, ${wpColor(T)} 55%, ${wpColor(Math.max(20,T-150))})`;
+  $("wpT").textContent = "线圈下表面约 "+T.toFixed(0)+" °C（仿真结果）";
+  $("tshow").textContent = t.toFixed(2)+" s";
+  $("seek").value = t/T_END*1000;
+  drawCurve($("cF"), d=>d[1]/1000, 28, 46, "#5eb1ff", t);
+  drawCurve($("cP"), d=>d[4]/1000, 0, 145, "#ff4d00", t);
+  drawScope(f, phi, I);
+}
+function loop(now){
+  const dt=(now-last)/1000; last=now;
+  if (playing){ t += dt*speed*T_END/60; if (t>=T_END){ t=T_END; playing=false; $("play").textContent="↻ 重播"; } }
+  render(); requestAnimationFrame(loop);
+}
+$("play").onclick = ()=>{ if(t>=T_END){t=0;playing=true;$("play").textContent="⏸ 暂停";} else {playing=!playing; $("play").textContent=playing?"⏸ 暂停":"▶ 播放";} };
+document.querySelectorAll(".spd").forEach(b=>b.onclick=()=>{speed=+b.dataset.s;document.querySelectorAll(".spd").forEach(x=>x.classList.remove("on"));b.classList.add("on");});
+$("seek").oninput = e=>{ t=e.target.value/1000*T_END; if(t>=T_END)t=T_END-1e-4; render(); };
+// #t=秒 可定格（截图用）
+const m = location.hash.match(/t=([\d.]+)/);
+if (m){ t=Math.min(T_END,parseFloat(m[1])); playing=false; render(); }
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
