@@ -116,6 +116,10 @@ class InductionPage(QtWidgets.QWidget):
         left.addWidget(self.btn)
         self.bar = QtWidgets.QProgressBar(); left.addWidget(self.bar)
         self.status = QtWidgets.QLabel("就绪"); self.status.setWordWrap(True); left.addWidget(self.status)
+        self.delta = QtWidgets.QLabel(""); self.delta.setWordWrap(True)
+        self.delta.setStyleSheet("color:#0b5cad; background:#eef4fb; padding:3px; border-radius:3px")
+        self.delta.hide(); left.addWidget(self.delta)
+        self._prev_r = None
         self.out = QtWidgets.QTextEdit(); self.out.setReadOnly(True); left.addWidget(self.out, 1)
         lw = QtWidgets.QWidget(); lw.setLayout(left)
         sa = QtWidgets.QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(lw)
@@ -191,6 +195,7 @@ class InductionPage(QtWidgets.QWidget):
         self.bar.setValue(100)
         self.status.setText("完成")
         self.sim = sim
+        self._show_delta(r)
         txt = [
             f"频率 {r['freq_kHz']:.0f} kHz，工件吸收 {r['power_kW']:.2f} kW",
             f"透入深度：冷态 {r['skin_cold_mm']:.2f} mm，热态(>居里点) {r['skin_hot_mm']:.2f} mm",
@@ -237,6 +242,34 @@ class InductionPage(QtWidgets.QWidget):
     def _load_replay(self, sim):
         self.replay.set_data(sim)
         self.tabs.setCurrentWidget(self.replay)
+
+    # 改参数→状态变化一行读数（QET 属性栏思路落在参数驱动主方向上）
+    _DELTA_FIELDS = [  # (键, 名, 格式, 判定变化的最小绝对差)
+        ("power_kW", "工件吸收", "{:.2f} kW", 0.02),
+        ("freq_kHz", "频率", "{:.1f} kHz", 0.2),
+        ("T_surf_end_heat", "外表面", "{:.0f}°C", 1.0),
+        ("T_inner_end_heat", "内孔", "{:.0f}°C", 1.0),
+        ("case_depth_mm", "硬化层", "{:.2f} mm", 0.05),
+        ("HRC_surface", "表面硬度", "{:.0f} HRC", 0.5),
+        ("coil_current_A", "线圈电流", "{:.0f} A", 1.0),
+    ]
+
+    def _show_delta(self, r):
+        prev, self._prev_r = self._prev_r, r
+        if not prev:
+            self.delta.hide(); return
+        parts = []
+        for k, name, fmt, tol in self._DELTA_FIELDS:
+            a, b = prev.get(k), r.get(k)
+            if a is None or b is None or abs(b - a) < tol:
+                continue
+            parts.append(f"{name} {fmt.format(a)}→{fmt.format(b)}")
+        if parts:
+            self.delta.setText("较上次：" + "｜".join(parts) + "　（均为仿真结果）")
+            self.delta.show()
+        else:
+            self.delta.setText("较上次：结果几乎不变（均为仿真结果）")
+            self.delta.show()
 
 
 class MainWindow(QtWidgets.QMainWindow):
