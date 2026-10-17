@@ -135,9 +135,12 @@ class InductionPage(QtWidgets.QWidget):
         self._pending = False
         for wgt in list(self.e.values()) + [self.target, self.power, self.theat, self.mur, self.tdelay, self.tq, self.inner]:
             wgt.valueChanged.connect(self._kick)
-        for wgt in (self.freq, self.mode, self.medium, self.conc):
+        for wgt in (self.mode, self.medium, self.conc):
             wgt.currentIndexChanged.connect(self._kick)
+        self.freq.currentIndexChanged.connect(self._kick)
+        self.freq.lineEdit().textEdited.connect(self._kick)   # 手输频率也算改参数
         self.nl.toggled.connect(self._kick)
+        self._last_sig = None   # 上次真正用于计算的参数快照：信号误触发但值没变就不重算
 
         # ---------------- 右侧图
         self.tabs = QtWidgets.QTabWidget()
@@ -149,9 +152,19 @@ class InductionPage(QtWidgets.QWidget):
             c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
         lay.addWidget(self.tabs, 1)
 
+    def _sig(self):
+        # 参与计算的全部输入快照（顺序固定）
+        return tuple(sp.value() for sp in list(self.e.values()) +
+                     [self.target, self.power, self.theat, self.mur, self.tdelay, self.tq, self.inner]) + (
+            self.freq.currentText().strip(), self.mode.currentIndex(),
+            self.medium.currentData(), self.conc.currentData(), self.nl.isChecked())
+
     def _kick(self, *_):
         if self.auto.isChecked() and getattr(self, "sim", None) is not None:
-            self._deb.start()           # 连改只在停手 1 s 后重算一次
+            s = self._sig()
+            if s != self._last_sig:     # 只在值真的变了才排重算（下拉框弹开/切子页等误触发全部无效）
+                self._last_sig = s
+                self._deb.start()       # 连改只在停手 1 s 后重算一次
 
     def _auto_start(self):
         if not self.btn.isEnabled():    # 上一次还在算：挂起，算完自动补跑
@@ -174,6 +187,7 @@ class InductionPage(QtWidgets.QWidget):
     def start(self):
         self.replay._pause()          # 重算期间停回放：结果到达与回放绘制不重叠
         self._deb.stop()
+        self._last_sig = self._sig()  # 以本次实际计算的输入为基准快照
         self.btn.setEnabled(False)
         self.th = QtCore.QThread()
         self.wk = Worker(self.params())
