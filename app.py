@@ -179,11 +179,17 @@ class InductionPage(QtWidgets.QWidget):
         self.wk = Worker(self.params())
         self.wk.moveToThread(self.th)
         self.th.started.connect(self.wk.run)
-        self.wk.progress.connect(lambda v, s: (self.bar.setValue(v), self.status.setText(s)))
+        self.wk.progress.connect(self._on_progress)
         self.wk.done.connect(self.show_result)
         self.wk.failed.connect(self.show_err)
         self.wk.done.connect(self.th.quit); self.wk.failed.connect(self.th.quit)
         self.th.start()
+
+    @QtCore.Slot(int, str)
+    def _on_progress(self, v, s):
+        # 必须用绑定方法连接：PySide6 对裸 lambda 不做线程编组，跨线程信号会在工作线程里直接调用（v0.32 家机验收：跑完非线性仿真后点频率下拉框 QBackingStore 崩溃，根因即此）
+        self.bar.setValue(v)
+        self.status.setText(s)
 
     def show_err(self, tb):
         self.btn.setEnabled(True)
