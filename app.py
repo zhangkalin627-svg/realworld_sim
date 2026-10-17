@@ -54,6 +54,23 @@ class Canvas(FigureCanvasQTAgg):
         super().__init__(self.fig)
 
 
+class ScanJob(QtCore.QObject):
+    progress = QtCore.Signal(int, str)
+    done = QtCore.Signal(object)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            self.done.emit(self.fn(lambda f: self.progress.emit(int(f * 100), "扫描中 …")))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+
 class InductionPage(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -150,6 +167,31 @@ class InductionPage(QtWidgets.QWidget):
         self.cv = {}
         for k, n in [("glow", "加热后外观(火色)"), ("temp", "温度场"), ("hrc", "硬度分布"), ("curve", "温度曲线"), ("line", "硬度-深度"), ("mur", "磁导率分布")]:
             c = Canvas(); self.cv[k] = c; self.tabs.addTab(c, n)
+        # ---------------- 频率扫描推荐（冶金结果直算，2026-10-17 用户设计目标）
+        scanw = QtWidgets.QWidget(); sl = QtWidgets.QVBoxLayout(scanw)
+        stop = QtWidgets.QHBoxLayout()
+        self.sc_target = QtWidgets.QDoubleSpinBox(); self.sc_target.setRange(0, 20); self.sc_target.setSingleStep(0.5)
+        self.sc_target.setSpecialValueText("不限"); self.sc_target.setValue(0)
+        self.btn_scan = QtWidgets.QPushButton("▶ 频率×时间扫描 (15 点，约 2-4 分钟)")
+        self.btn_scan.clicked.connect(self.start_scan)
+        self.btn_mscan = QtWidgets.QPushButton("▶ 介质对比 (用左侧频率/时间)")
+        self.btn_mscan.clicked.connect(self.start_mscan)
+        stop.addWidget(QtWidgets.QLabel("目标淬硬层深 mm")); stop.addWidget(self.sc_target)
+        stop.addWidget(self.btn_scan); stop.addWidget(self.btn_mscan); stop.addStretch(1)
+        sl.addLayout(stop)
+        self.sc_bar = QtWidgets.QProgressBar(); sl.addWidget(self.sc_bar)
+        self.sc_tab = QtWidgets.QTableWidget(0, 9)
+        self.sc_tab.setHorizontalHeaderLabels(["频率kHz", "时间s", "表面°C", "奥氏体化深mm", "淬硬层mm",
+                                               "表面HRC", "组织(定性)", "效率%", "判定"])
+        self.sc_tab.horizontalHeader().setStretchLastSection(True)
+        sl.addWidget(self.sc_tab, 1)
+        self.sc_out = QtWidgets.QTextEdit(); self.sc_out.setReadOnly(True); self.sc_out.setMaximumHeight(150)
+        sl.addWidget(self.sc_out)
+        sl.addWidget(QtWidgets.QLabel(
+            "全部【仿真结果】：45 钢 CCT 规则化硬度模型；奥氏体化=温度门槛近似（未解碳化物溶解动力学）；"
+            "换热系数为文献典型量级，需按现场校准。换钢号/成分会改结论。"))
+        self.tabs.addTab(scanw, "频率扫描推荐")
+
         lay.addWidget(self.tabs, 1)
 
     def _sig(self):
@@ -204,6 +246,82 @@ class InductionPage(QtWidgets.QWidget):
         # 必须用绑定方法连接：PySide6 对裸 lambda 不做线程编组，跨线程信号会在工作线程里直接调用（v0.32 家机验收：跑完非线性仿真后点频率下拉框 QBackingStore 崩溃，根因即此）
         self.bar.setValue(v)
         self.status.setText(s)
+
+    # ------------------------------------------------------------- 频率扫描
+    def start_scan(self):
+        self.btn_scan.setEnabled(False); self.btn_mscan.setEnabled(False)
+        self.sc_tab.setRowCount(0); self.sc_out.setPlainText("扫描中 …")
+        wall = self.e["wall"].value(); medium = self.medium.currentData()
+        power = self.power.value(); od = self.e["neck_od"].value()
+        td = self.sc_target.value() or None
+        freqs, times = getattr(self, "_scan_grid", (None, None))   # 截图自测用小网格
+
+        def job(prog):
+            from rw.scan import scan_freq_time
+            return scan_freq_time(wall, medium=medium, power_kw=power, freqs=freqs, times=times,
+                                  target_depth=td, od=od, progress=prog)
+        self._spawn_scan(job, self._scan_done)
+
+    def start_mscan(self):
+        self.btn_scan.setEnabled(False); self.btn_mscan.setEnabled(False)
+        self.sc_tab.setRowCount(0); self.sc_out.setPlainText("介质对比中 …")
+        wall = self.e["wall"].value(); power = self.power.value(); od = self.e["neck_od"].value()
+        f = float(self.freq.currentText()) * 1e3 / 1e3; t = self.theat.value()
+
+        def job(prog):
+            from rw.scan import scan_media
+            return scan_media(wall, f, t, power_kw=power, od=od, progress=prog)
+        self._spawn_scan(job, self._mscan_done)
+
+    def _spawn_scan(self, job, on_done):
+        self.sc_th = QtCore.QThread()
+        self.sc_job = ScanJob(job)
+        self.sc_job.moveToThread(self.sc_th)
+        self.sc_th.started.connect(self.sc_job.run)
+        self.sc_job.progress.connect(self._on_scan_progress)
+        self.sc_job.done.connect(on_done)
+        self.sc_job.failed.connect(self._scan_fail)
+        self.sc_job.done.connect(self.sc_th.quit); self.sc_job.failed.connect(self.sc_th.quit)
+        self.sc_th.start()
+
+    @QtCore.Slot(int, str)
+    def _on_scan_progress(self, v, s):
+        # 必须绑定方法连接（PySide6 裸 lambda 跨线程不编组的教训，见 _on_progress 注释）
+        self.sc_bar.setValue(v)
+
+    def _scan_fail(self, tb):
+        self.btn_scan.setEnabled(True); self.btn_mscan.setEnabled(True)
+        self.sc_out.setPlainText(tb)
+
+    def _fill_scan_rows(self, rows, medium_col=False):
+        cols = ["freq_kHz", "t_heat_s", "T_surf", "aus_depth_mm", "case_depth_mm",
+                "HRC_surf", "micro", "eff", "verdict"]
+        self.sc_tab.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            vals = [f"{r['freq_kHz']:.0f}", f"{r['t_heat_s']:.2f}", f"{r['T_surf']:.0f}",
+                    f"{r['aus_depth_mm']:.2f}", f"{r['case_depth_mm']:.2f}", f"{r['HRC_surf']:.0f}",
+                    r["micro"] + (f"｜{r['medium_name']}" if medium_col else ""),
+                    f"{r['eff']*100:.0f}", r["verdict"]]
+            for j, v in enumerate(vals):
+                self.sc_tab.setItem(i, j, QtWidgets.QTableWidgetItem(v))
+
+    def _scan_done(self, res):
+        self.btn_scan.setEnabled(True); self.btn_mscan.setEnabled(True)
+        self.sc_bar.setValue(100)
+        self._fill_scan_rows(res["rows"])
+        lines = [f"【仿真结果】壁厚 {res['wall']:.1f} mm，介质 {res['rows'][0]['medium_name']}，"
+                 f"网格 {len(res['freqs'])} 频率 × {len(res['times'])} 时间。", "", "推荐：" + res["reason"]]
+        self.sc_out.setPlainText("\n".join(lines))
+
+    def _mscan_done(self, res):
+        self.btn_scan.setEnabled(True); self.btn_mscan.setEnabled(True)
+        self.sc_bar.setValue(100)
+        self._fill_scan_rows(res["rows"], medium_col=True)
+        best = max(res["rows"], key=lambda r: r["HRC_surf"])
+        self.sc_out.setPlainText(
+            f"【仿真结果】壁厚 {res['wall']:.1f} mm，{res['freq_kHz']:.0f} kHz / {res['t_heat']:.1f} s 下各介质对比。\n"
+            f"表面硬度最高：{best['medium_name']} → {best['HRC_surf']:.0f} HRC（{best['micro']}），"
+            f"淬硬层 {best['case_depth_mm']:.2f} mm。")
 
     def show_err(self, tb):
         self.btn.setEnabled(True)
@@ -421,6 +539,16 @@ def main():
                     poll.start(500)
                 else:
                     QtCore.QTimer.singleShot(1500, lambda: (w.grab().save(out), app.quit()))
+        elif which == "scan":
+            # 扫描页自测截图：小网格跑一遍真实扫描
+            w.ind._scan_grid = ((30.0, 100.0), (0.7, 1.5))
+            w.ind.tabs.setCurrentIndex(w.ind.tabs.count() - 1)
+            w.ind.start_scan()
+            pg = w.ind
+            poll = QtCore.QTimer(w)
+            poll.timeout.connect(lambda: (poll.stop(), QtCore.QTimer.singleShot(500, lambda: (w.grab().save(out), app.quit()))) if pg.btn_scan.isEnabled() else None)
+            poll.start(1000)
+            QtCore.QTimer.singleShot(300000, lambda: (w.grab().save(out), app.quit()))
         elif which.startswith("flow"):
             # flow0 管网 flow1 水锤 flow2 放空+射流
             sub = int(which[4:]) if which[4:].isdigit() else 0
