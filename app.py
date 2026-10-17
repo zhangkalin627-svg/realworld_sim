@@ -172,7 +172,7 @@ class InductionPage(QtWidgets.QWidget):
         stop = QtWidgets.QHBoxLayout()
         self.sc_target = QtWidgets.QDoubleSpinBox(); self.sc_target.setRange(0, 20); self.sc_target.setSingleStep(0.5)
         self.sc_target.setSpecialValueText("不限"); self.sc_target.setValue(0)
-        self.btn_scan = QtWidgets.QPushButton("▶ 频率×时间扫描 (15 点，约 2-4 分钟)")
+        self.btn_scan = QtWidgets.QPushButton("▶ 频率×时间扫描 (15 点，约 5-8 分钟)")
         self.btn_scan.clicked.connect(self.start_scan)
         self.btn_mscan = QtWidgets.QPushButton("▶ 介质对比 (用左侧频率/时间)")
         self.btn_mscan.clicked.connect(self.start_mscan)
