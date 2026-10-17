@@ -34,7 +34,8 @@ def plot_conc(fig, res):
     keys = list(res.keys())
     names = [res[k]["name"].split(" ")[0] for k in keys]
     a1 = fig.add_subplot(131)
-    cols = ["#888", "#1f77b4", "#2ca02c", "#ff7f0e"][:len(keys)]
+    _C = ["#888", "#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#17becf", "#d62728"]
+    cols = _C[:len(keys)]
     a1.bar(names, [res[k]["I_rms"] for k in keys], color=cols)
     a1.set_ylabel("线圈电流 (A 有效值)"); a1.set_title("同样 6 kW 吸收功率所需电流")
     a1.tick_params(axis="x", labelrotation=20, labelsize=8)

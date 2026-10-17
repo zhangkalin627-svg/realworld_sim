@@ -358,6 +358,8 @@ class InductionQuenchSim:
         sig = np.where(self.steel_el, M.steel_sigma(T_el), 0.0)
         for a, m_a in zip(self.aux, self.aux_idx):
             sig[m_a] = a.sigma
+        if self.conc is not None and not self.conc.is_magnetic:
+            sig[self.conc_el] = self.conc.sigma      # 铝/石墨"导磁位"：涡流由求解器直接解（屏蔽机制）
         self._sig_el = sig
         w = 2 * np.pi * self.f
         areas = self._el_area_r()
@@ -379,7 +381,7 @@ class InductionQuenchSim:
                 if self.nonlinear:
                     m = self.steel_el
                     new[m] = self.bh.mur_from_B1(B1[m], T_el[m])
-                if self.conc is not None:
+                if self.conc is not None and self.conc.is_magnetic:
                     m = self.conc_el
                     new[m] = self.conc.mat.curve.mur_from_B1(B1[m], self.conc_T)
                 chg = np.abs(np.log(new / mur))
@@ -406,7 +408,7 @@ class InductionQuenchSim:
             self.n_iter_em = it + 1
             self._B1_el = B1
             self._mur_el = mur
-            if self.conc is not None:
+            if self.conc is not None and self.conc.is_magnetic:
                 pv, _, _ = self.conc.mat.loss_density(B1, self.f)
                 pv = pv * self.conc.mat.loss_scale(self.conc_T)
                 self.conc_pv = np.where(self.conc_el, pv, 0.0)
@@ -414,6 +416,9 @@ class InductionQuenchSim:
         a_el = np.abs(x[self.mesh.t]) ** 2
         q_el = 0.5 * sig * w**2 * a_el.mean(axis=0)
         q = q_el[self.steel_idx] * I_coil**2
+        if self.conc is not None and not self.conc.is_magnetic:
+            self.conc_pv = np.where(self.conc_el, q_el * I_coil**2, 0.0)
+            self.conc_loss_W = float(np.sum(self.conc_pv * areas * 2 * np.pi))
         if self.aux:
             self.aux_q_el = np.where(self.aux_el, q_el * I_coil**2, 0.0)
             self.aux_loss_W = float(np.sum(self.aux_q_el * areas * 2 * np.pi))
@@ -430,7 +435,7 @@ class InductionQuenchSim:
                 mur[self.steel_el] = 30.0
             else:
                 mur = np.where(self.steel_el, M.steel_mur(T_el, self.mur_cold), 1.0)
-            if self.conc is not None:
+            if self.conc is not None and self.conc.is_magnetic:
                 mur[self.conc_el] = self.conc.mat.curve.mu_i * 0.2
             for a, m_a in zip(self.aux, self.aux_idx):
                 mur[m_a] = a.mur
@@ -780,7 +785,7 @@ class InductionQuenchSim:
             pv = self.conc_loss_W / vol           # 平均损耗密度 W/m3
             res["conc_dTdt"] = pv / 3.5e6         # 绝热升温速率 K/s (ρcp≈3.5e6 J/m3K)
             if res["conc_dTdt"] > 20:
-                warn.append(f"导磁体({self.conc.mat.name})自身发热 {self.conc_loss_W/1e3:.2f} kW，"
+                warn.append(f"导磁体({self.conc.name})自身发热 {self.conc_loss_W/1e3:.2f} kW，"
                             f"绝热升温约 {res['conc_dTdt']:.0f} K/s，必须水冷或会过热")
         bad = [k for k, v in res.items() if isinstance(v, float) and np.isnan(v)]
         if bad:
