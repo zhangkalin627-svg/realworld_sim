@@ -1,7 +1,10 @@
-"""粉尘动画模型回归（简化动力学，量级断言）：
-  - 硅钢案：粉尘被吸向腿尖，粘附数随时间增长；
-  - 木头基线（无导磁体）：无处可粘，stuck 恒 0；
-  - 开气枪：空气中粒子数下降、已粘附的可被吹走；
+"""粉尘动画模型回归（简化动力学，量级断言；2026-10-17 现场视频校准版）：
+  现场工况=棒料水平连续过环：氧化皮从棒料底面剥落，重力⊥棒轴沿 +r，
+  积灰面=线圈内壁+导磁体底侧（不再假设只粘腿尖）。
+  - 硅钢案：粘附数随时间增长、层厚>0；
+  - 木头基线（无导磁体）：线圈内壁同样积灰（现场：裸线圈也脏），stuck>0；
+  - 两案粘附都应落在线圈窗口内的内壁带（水平过环的重力方向）；
+  - 开气枪：空气中粒子数受控、已粘附的可被吹走；
   - 风险/统计字段齐全。
 运行：python3 tools/test_dust_anim.py"""
 import os, sys
@@ -27,21 +30,22 @@ print("木头 30s:", {k: (round(v, 2) if isinstance(v, float) else v) for k, v i
 
 if not st_si["stuck"] > 0:
     fails.append("硅钢案 30s 无粘附")
-if not st_no["stuck"] == 0:
-    fails.append("木头基线不该有粘附")
+if not st_no["stuck"] > 0:
+    fails.append("木头基线（裸线圈内壁）应有粘附")
 if not st_si["layer_um"] > 0:
     fails.append("硅钢案层厚应>0")
 if st_si["risk"] not in ("低", "中", "高"):
     fails.append("风险分级缺失")
 
-# 粘附位置应集中在导磁体腿尖附近（线圈端面之外的内侧）
-if len(ds_si.stuck):
-    g = ds_si.g
-    z = ds_si.stuck[:, 1]
-    frac_legs = np.mean((z < g.coil_z0) | (z > g.coil_z1))
-    print(f"粘附落在腿区(端面外)比例 {frac_legs:.2f}")
-    if frac_legs < 0.5:
-        fails.append(f"粘附位置不集中腿尖 ({frac_legs:.2f})")
+# 水平过环校准：粘附应落在线圈窗口内的内壁带（重力⊥棒轴，粉尘垂直下落积在内壁）
+for name, ds in (("硅钢", ds_si), ("木头", ds_no)):
+    if len(ds.stuck):
+        g = ds.g
+        z = ds.stuck[:, 1]
+        frac_bore = np.mean((z >= g.coil_z0) & (z <= g.coil_z1))
+        print(f"{name}案 粘附落在线圈窗口内壁带比例 {frac_bore:.2f}")
+        if frac_bore < 0.8:
+            fails.append(f"{name}案粘附不在线圈窗口内壁带 ({frac_bore:.2f})")
 
 # 气枪：再跑 10 s，空气中和已粘附的都应减少
 before_air, before_stuck = st_si["airborne"], st_si["stuck"]
