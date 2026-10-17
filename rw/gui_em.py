@@ -68,13 +68,13 @@ class EMPage(QtWidgets.QWidget):
         top = QtWidgets.QHBoxLayout()
         self.f_c = QtWidgets.QComboBox(); self.f_c.setEditable(True); self.f_c.addItems(["10", "20", "30", "50", "100"]); self.f_c.setCurrentText("30")
         self.p_c = QtWidgets.QDoubleSpinBox(); self.p_c.setRange(0.5, 100); self.p_c.setValue(6.0)
-        self.btn_c = QtWidgets.QPushButton("▶ 运行对比 (无 / 硅钢叠片 / SMC / 铁氧体)")
+        self.btn_c = QtWidgets.QPushButton("▶ 六案对比 (无=木头 / 硅钢 / SMC / 铁氧体 / 铝 / 石墨)")
         self.btn_c.clicked.connect(self.run_conc)
         top.addWidget(QtWidgets.QLabel("频率 kHz")); top.addWidget(self.f_c)
         top.addWidget(QtWidgets.QLabel("吸收功率 kW")); top.addWidget(self.p_c); top.addWidget(self.btn_c); top.addStretch(1)
         l1.addLayout(top)
         self.c_cmp = _Canvas(); l1.addWidget(self.c_cmp, 1)
-        self.t_cmp = QtWidgets.QTextEdit(); self.t_cmp.setReadOnly(True); self.t_cmp.setMaximumHeight(130)
+        self.t_cmp = QtWidgets.QTextEdit(); self.t_cmp.setReadOnly(True); self.t_cmp.setMaximumHeight(230)
         l1.addWidget(self.t_cmp)
         self.tabs.addTab(w1, "导磁体对比")
 
@@ -103,20 +103,23 @@ class EMPage(QtWidgets.QWidget):
 
         def job():
             from .em.check import compare_concentrators
-            return compare_concentrators(freq=f, power_kw=P, kinds=(None, "sife", "smc", "ferrite"))
+            return compare_concentrators(freq=f, power_kw=P, kinds=(None, "sife", "smc", "ferrite", "alu", "graphite"))
         _spawn(self, job, self._show_conc, self._err_c)
 
     def _show_conc(self, res):
         self.btn_c.setEnabled(True)
         ev.plot_conc(self.c_cmp.fig, res); self.c_cmp.draw()
         base = res["none"]
-        lines = []
+        lines = ["【仿真结果】同功率同频率六案对比（粉尘/拉弧指标为量级估计）："]
         for k, v in res.items():
             d = (v["I_rms"] / base["I_rms"] - 1) * 100
-            lines.append(f"{v['name']}: 电流 {v['I_rms']:.0f} A ({d:+.0f}%)，电效率 {v['eff']*100:.1f}%，导磁体损耗 {v['conc_loss_kW']*1e3:.0f} W，"
-                         f"其磁密峰值 {v['Bmax_conc']:.2f} T，绝热升温 {v['dTdt']:.1f} K/s")
-        lines.append("⚠ 导磁体按各向同性 μ 处理(叠片实际是各向异性)；损耗用 经典涡流+矩形磁滞回线 估算，参数是典型量级，请按供应商数据改；"
-                     "线圈铜损用“电流挤在内表面”估算，有导磁体时偏差可达 ±30%；没算导磁体自身温升/居里点。")
+            lines.append(f"{v['name']}: 电流 {v['I_rms']:.0f} A ({d:+.0f}%)，电效率 {v['eff']*100:.1f}%，导磁位损耗 {v['conc_loss_kW']*1e3:.0f} W，"
+                         f"磁密峰值 {v['Bmax_conc']:.2f} T，绝热升温 {v['dTdt']:.1f} K/s")
+            lines.append(f"　　积灰区表面 B {v['B_dust_T']:.2f} T，50µm 铁粉受力约 {v['F_dust_uN']:.1f} µN，单匝电压约 {v['V_turn']:.0f} V")
+        lines.append("⚠ 均为仿真结果，非实测。铝/石墨不是导磁体(μr=1)：其涡流由求解器直接解，物理作用是屏蔽/排斥磁场。"
+                     "铁粉受力为饱和偶极量级估计 F≈V·Ms·∇B；单匝电压=总功率/电流的单匝等效，未解静电场；"
+                     "拉弧只能按 场强+积灰 定性分级，粉尘堆积过程不可解。导磁体按各向同性 μ 处理(叠片实际各向异性)；"
+                     "损耗参数是典型量级，请按供应商数据改；线圈铜损估算偏差可达 ±30%。")
         self.t_cmp.setPlainText("\n".join(lines))
 
     def _err_c(self, tb):
