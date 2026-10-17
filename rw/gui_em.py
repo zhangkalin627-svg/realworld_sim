@@ -92,6 +92,92 @@ class EMPage(QtWidgets.QWidget):
         self.t_3d = QtWidgets.QTextEdit(); self.t_3d.setReadOnly(True); self.t_3d.setMaximumHeight(150)
         l2.addWidget(self.t_3d)
         self.tabs.addTab(w2, "全三维涡流")
+        # ---- 3 粉尘/拉弧动画（参数驱动，简化动力学）
+        w3 = QtWidgets.QWidget(); l3 = QtWidgets.QVBoxLayout(w3)
+        top3 = QtWidgets.QHBoxLayout()
+        self.d_mat = QtWidgets.QComboBox()
+        for label, kind in [("无（木头基线）", None), ("硅钢叠片", "sife"), ("SMC 铁粉芯", "smc"),
+                            ("铁氧体", "ferrite"), ("铝（屏蔽）", "alu"), ("石墨（弱屏蔽）", "graphite")]:
+            self.d_mat.addItem(label, kind)
+        self.d_mat.setCurrentIndex(1)
+        self.btn_d = QtWidgets.QPushButton("▶ 开始")
+        self.btn_d.clicked.connect(self.start_dust)
+        self.btn_dpause = QtWidgets.QPushButton("⏸ 暂停"); self.btn_dpause.setEnabled(False)
+        self.btn_dpause.clicked.connect(self.pause_dust)
+        self.btn_dreset = QtWidgets.QPushButton("⟲ 重置"); self.btn_dreset.setEnabled(False)
+        self.btn_dreset.clicked.connect(self.reset_dust)
+        self.chk_blow = QtWidgets.QCheckBox("气枪吹扫")
+        self.d_speed = QtWidgets.QComboBox(); self.d_speed.addItems(["1×", "5×", "20×", "60×"]); self.d_speed.setCurrentIndex(1)
+        top3.addWidget(QtWidgets.QLabel("导磁位材料")); top3.addWidget(self.d_mat)
+        top3.addWidget(self.btn_d); top3.addWidget(self.btn_dpause); top3.addWidget(self.btn_dreset)
+        top3.addWidget(self.chk_blow)
+        top3.addWidget(QtWidgets.QLabel("速度")); top3.addWidget(self.d_speed)
+        self.d_stat = QtWidgets.QLabel("—"); top3.addWidget(self.d_stat, 1)
+        l3.addLayout(top3)
+        self.c_dust = _Canvas(); l3.addWidget(self.c_dust, 1)
+        note = QtWidgets.QLabel(
+            "仿真结果 · 简化动力学（演示趋势，不是拉弧时间预测）：粒子过阻尼，磁力=该材料一次电磁求解的场梯度×饱和偶极量级，"
+            "另加热羽流/重力/空气阻力；粉尘按氧化铁皮磁化强度，非纯铁；拉弧风险=(最大层厚/200µm)×(单匝电压/50V) 的定性分级。"
+            "现场视频/实测到了可校准参数。")
+        note.setWordWrap(True); l3.addWidget(note)
+        self.tabs.addTab(w3, "粉尘/拉弧动画")
+        self._dust = None
+        self._dust_timer = QtCore.QTimer(self); self._dust_timer.setInterval(33)
+        self._dust_timer.timeout.connect(self._dust_frame)
+        self._dust_art = None
+
+    # ------------------------------------------------------------- 粉尘动画
+    def start_dust(self):
+        if self._dust is not None:                     # 已有场 → 继续
+            self._dust_timer.start()
+            self.btn_d.setEnabled(False); self.btn_dpause.setEnabled(True); self.btn_dreset.setEnabled(True)
+            return
+        self.btn_d.setEnabled(False); self.d_mat.setEnabled(False)
+        self.d_stat.setText("求解电磁场中 …")
+        kind = self.d_mat.currentData()
+
+        def job():
+            from .em.dust import build_dust_sim
+            return build_dust_sim(kind)
+        _spawn(self, job, self._dust_ready, self._dust_fail)
+
+    def _dust_ready(self, out):
+        from .em.dust import draw_static
+        self._dust, rec = out
+        self.d_mat.setEnabled(True); self.btn_dpause.setEnabled(True); self.btn_dreset.setEnabled(True)
+        ax = self.c_dust.fig.add_subplot(111)
+        self._dust_ax = ax
+        self._dust_art = draw_static(ax, self._dust)
+        ax.set_title("开始 …")
+        self.c_dust.draw()
+        self._dust_timer.start()
+
+    def _dust_fail(self, tb):
+        self.btn_d.setEnabled(True); self.d_mat.setEnabled(True)
+        self.d_stat.setText("失败：" + tb.splitlines()[-1])
+
+    def pause_dust(self):
+        self._dust_timer.stop()
+        self.btn_d.setEnabled(True); self.btn_dpause.setEnabled(False)
+
+    def reset_dust(self):
+        self._dust_timer.stop()
+        self._dust = None
+        self.c_dust.fig.clear(); self.c_dust.draw()
+        self.btn_d.setEnabled(True); self.btn_dpause.setEnabled(False); self.btn_dreset.setEnabled(False)
+        self.d_stat.setText("—")
+
+    def _dust_frame(self):
+        from .em.dust import update_scatter
+        if self._dust is None or self._dust_art is None:
+            return
+        speed = [1, 5, 20, 60][self.d_speed.currentIndex()]
+        ds = self._dust
+        ds.step(0.033 * speed, blow=self.chk_blow.isChecked())
+        st = update_scatter(self._dust_ax, self._dust_art[0], self._dust_art[1], ds)
+        self.d_stat.setText(f"t={st['t']:.0f}s 空气 {st['airborne']} 粘附 {st['stuck']} 层厚 {st['layer_um']:.0f}µm 风险 {st['risk']}")
+        self.c_dust.draw_idle()
+
         self.show_3d(self._load_cache())
 
     # ------------------------------------------------------------- 导磁体
