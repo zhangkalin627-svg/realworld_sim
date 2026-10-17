@@ -391,6 +391,25 @@ def main():
                         poll.stop(); QtCore.QTimer.singleShot(800, lambda: (w.grab().save(out), app.quit()))
                 poll.timeout.connect(check3); poll.start(500)
                 QtCore.QTimer.singleShot(280000, lambda: (w.grab().save(out), app.quit()))
+            elif sub == 4:
+                # em4 粉尘/拉弧动画：建场后自动开始，跑一段再截
+                w.top.setCurrentWidget(w.em)
+                w.em.tabs.setCurrentIndex(3)
+                w.em.d_mat.setCurrentIndex(1)          # 硅钢
+                w.em.d_speed.setCurrentIndex(2)        # 20×
+                w.em.start_dust()
+                pg = w.em
+                poll = QtCore.QTimer(w)
+                state = {"built": False, "t0": None}
+
+                def check4():
+                    import time as _t
+                    if pg._dust is not None and not state["built"]:
+                        state["built"] = True; state["t0"] = _t.time()
+                    if state["built"] and _t.time() - state["t0"] > 12:   # 20× → 约 240 个 sim-秒
+                        poll.stop(); QtCore.QTimer.singleShot(300, lambda: (w.grab().save(out), app.quit()))
+                poll.timeout.connect(check4); poll.start(500)
+                QtCore.QTimer.singleShot(120000, lambda: (w.grab().save(out), app.quit()))
             else:
                 w.top.setCurrentWidget(w.em)
                 w.em.tabs.setCurrentIndex(sub)
