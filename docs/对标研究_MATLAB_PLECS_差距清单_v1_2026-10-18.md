@@ -101,3 +101,15 @@
 待核对（末批）：正式电力电子 demo（家机桥在找）、PLECS 5.0.6 许可到位后同套（库结构/求解器/热域/扫描）。
 
 **定步长面板补充（matlab_14）**：定步长=基础采样时间（auto）；过零检测为**可选项**（"为定步长仿真启用过零检测"，默认关）——定步长+可选事件检测，与 PLECS 必配事件定位形成对照；任务/采样时间选项=周期性采样时间约束（无约束）+并发/速率转换/优先级 4 项；高级参数含仿真时间 0 处日期时间。→ F1/F2 配置面设计：我们的定步长模式也应提供"开关事件定位"开关并默认开（电力电子场景关事件定位=换向时刻误差一个步长）。
+
+## 增补 v1.3（2026-10-18 11:54）：官方 BuckConverterExample 全模型 + MOSFET 器件参数窗（MATLAB 侧核对收官）
+
+**官方 Buck 模型结构（实机）**：DC 30V → 电流传感器 → N-Channel MOSFET 1（开关）→ 续流二极管 → L（含寄生 R）→ C → 负载（R Load + Cyclic Load 循环负载）+ 电压传感器；控制回路 VRef=15 → 求和 → Continuous PI Controller → PWML/PWMH Driver；200Hz 工况探针；Goto 标签引 u_dem/i_load/i_supply 三路到 Scope。停止时间 0.006s，普通模式。
+- **模型注释块即脚本化演示入口**：注释内嵌可点超链接（Plot voltages (see code)、Plot voltages at a switching event (see code)、Set controller: Continuous/Discrete、Compare controller behavior (see code)、Explore simulation results using Simscape Results Explorer、相关示例：switching and heat flow / thermal only / faults）。→ 我们的一键示例可借鉴：示例卡片内嵌"画电压波形/看开关事件细节/切连续离散控制器/开结果对比"等可点动作，把演示脚本挂在界面里而不是让用户翻文档。
+- 控制器连续/离散一键切换 + SDI 对比两种控制器行为——F6 控制器对象需要 dual 实现。
+- 相关示例链：switching and heat flow（开关+热流耦合）、thermal only、faults——证实 Simscape 热-电耦合与故障注入是对方电力电子的纵深卖点，对齐 F4 热路扩展与器件故障模式。
+
+**N-Channel MOSFET 参数窗（示例默认值，非本项目设计值）**：建模选项=基于阈值；参数化="根据数据手册指定"；主参数：R_DS(on)=0.1Ω（参照 Ids=6A, Vgs=15V）、Vth=2V、沟道调制=0 1/V、测量温度=25°C；折叠分区：欧姆电阻、封装、电容、体二极管、温度相关性、初始目标、标称值、故障、实用工具。
+- → F8 组件 schema 升级：器件参数分区化（主参数/电容/体二极管/温度/故障），数据手册指定模式（给参照工作点 R@Ids,Vgs）；初始目标（initial targets，优先级高/低）是 Simscape 特有的初始化声明——我们的初值策略可借鉴优先级语义；标称值（nominal values）用于数值缩放，值得抄进 F1 求解器（绝对容差 auto 之外按标称值缩放，比对方更省心）。
+
+MATLAB 侧核对至此收官：库树、求解器（变步长全列表+三参数+定步长全列表+面板细节）、Scope/SDI、自带组件 mask、官方 demo 全模型与器件参数窗，共 16 张实机截图存私有备份夹（不进公开仓库，仅设计核对用）。剩余：PLECS 5.0.6 待许可。
