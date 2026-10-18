@@ -11,3 +11,6 @@ build/\n*.egg-info/
 # 私有材料(公司内部资料/受限制来源)：只放本地，绝不推送发布
 private/
 _私密/
+tools/batch/out/
+tools/batch/run/
+tools/batch/done/

@@ -1,0 +1,9 @@
+# 回归稳定性：把 tools/test_*.py 里不依赖 GUI 的测试各重复跑 5 轮，记录失败/不稳定（输出到 out/tests_loop.tsv）。
+cd ~/realworld_sim; mkdir -p tools/batch/out
+for i in 1 2 3 4 5; do
+  for f in tools/test_scan.py tools/test_inc.py tools/test_plc_addr_range.py tools/test_plc_load.py tools/test_plc_matrix.py tools/test_retentive_timer.py tools/test_induction_geometry.py; do
+    [ -f $f ] || continue
+    s=$(date +%s); timeout 1200 ~/venv/bin/python $f > /tmp/t.log 2>&1; rc=$?
+    echo -e "$(date +%FT%T)\tround$i\t$f\texit=$rc\tsecs=$(( $(date +%s)-s ))" >> tools/batch/out/tests_loop.tsv
+  done
+done
