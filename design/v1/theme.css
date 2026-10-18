@@ -1,7 +1,7 @@
 :root{
   --bg0:#07090e; --bg1:#0b0f16; --bg2:#10161f; --panel:#121a26; --panel2:#16202e;
   --line:#1e2a3a; --line2:#28374c;
-  --tx0:#e8eef6; --tx1:#9fb0c3; --tx2:#5d6f84;
+  --tx0:#e8eef6; --tx1:#9fb0c3; --tx2:#7d92aa;
   --cy:#2dd4bf; --cy2:#22d3ee; --em:#ff7a45; --em2:#ffb454; --gd:#e8c268;
   --ok:#34d399; --warn:#fbbf24; --bad:#f87171;
   --mono:"SF Mono","Cascadia Code",Consolas,monospace;
@@ -73,3 +73,5 @@ body{background:var(--bg0);color:var(--tx0);font-family:"PingFang SC","Microsoft
 .vpill .vi{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
 .vpill.ok .vi{background:rgba(52,211,153,.14);color:var(--ok)}
 .vpill small{display:block;color:var(--tx2);font-size:10.5px;margin-top:1px}
+.badge.ill{background:rgba(167,139,250,.12);color:#b9a5f5;border:1px solid rgba(167,139,250,.35)}
+.wavtag{position:absolute;right:6px;top:6px;font-size:9.5px;padding:1.5px 7px;border-radius:99px;letter-spacing:.6px}
