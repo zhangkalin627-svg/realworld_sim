@@ -108,7 +108,9 @@ def import_spice(path, text=None):
                 k -= 1
             nn = k - 1  # 最后一个非参数字段是子电路名
         if nn:
-            f[1:1 + nn] = [_node(x) for x in f[1:1 + nn]]
+            # 行为源（E/G 的 value={...}/table 形式）表达式不是节点名：含 {} 或 = 的字段原样保留，
+            # 否则 _node 会把表达式里的 (){}= 换成下划线，网表被毁（E 源 value={k*(V(a)-V(b))} 案例）
+            f[1:1 + nn] = [_node(x) if not re.search(r"[{}=]", x) else x for x in f[1:1 + nn]]
         c.raw(" ".join(f))
     _check_excitation(c)
     return c
