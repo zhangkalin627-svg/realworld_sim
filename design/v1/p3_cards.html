@@ -90,7 +90,7 @@
 <text x="6" y="178" fill="#7d92aa" font-size="10" font-family="monospace">317 A</text></svg>          <div style="position:absolute;left:52%;top:8px;font-size:10.5px;color:var(--em);background:var(--bg2);border:1px solid rgba(255,122,69,.35);padding:3px 10px;border-radius:7px">15 ms 施加 L 阶跃(过居里)· f₀ 越过驱动频率</div>
         </div>
         <div style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--tx2);align-items:center">
-          <span>定频驱动下 f₀ 上移 → 先逼近后越过谐振点 → 包络 +7.2%,继续升温将进入容性区(风险)。实际过居里为秒级渐变,此处用阶跃作保守简化</span>
+          <span>定频驱动下 f₀ 上移越过驱动频率 → 负载由感性转容性,ZVS 丢失(硬开关风险)→ 需 PLL 重新追频;包络 +7.2%。实际过居里为秒级渐变,此处用阶跃作保守简化</span><span class="badge" style="margin-left:auto;white-space:nowrap;background:rgba(248,113,113,.14);color:#f87171;border:1px solid rgba(248,113,113,.4)">ZVS 丢失风险</span>
         </div>
       </div>
     </div>
