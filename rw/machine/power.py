@@ -159,9 +159,10 @@ class Bus:
         Vold = self.V
         if self.k2:
             Rq = sp.Rs + (sp.R_comm() if sp.use_device_model else 0.0)
-            disc = Vsrc * Vsrc - 4 * P_load * Rq
+            Pb = Vold * Vold / sp.R_bleed   # v0.33：泄放功率并入源侧功率方程——旧版 k2 只记 E_bleed
+            disc = Vsrc * Vsrc - 4 * (P_load + Pb) * Rq
             Vn = (Vsrc + math.sqrt(disc)) / 2 if disc >= 0 else Vsrc / 2
-            Isrc = P_load / max(Vn, 1.0) + sp.C_bus * (Vn - Vold) / dt
+            Isrc = (P_load + Vn * Vn / sp.R_bleed) / max(Vn, 1.0) + sp.C_bus * (Vn - Vold) / dt
             self.E_R += Isrc * Isrc * Rq * dt
         elif self.k1:
             # C dV/dt = (Vsrc − V)/Rpc − P/V − V/Rbleed（二极管单向，V>Vsrc 时不倒灌）
@@ -251,7 +252,7 @@ class Controller:
 
     def __init__(self, sp: Spec):
         self.sp = sp
-        self.t = 0.0; self.mode = "boot"; self.f = sp.f_max * 0.75; self.m = 1.0
+        self.t = 0.0; self.mode = "boot"; self.f = sp.f_max * 0.75; self.m = sp.m_min if sp.ctl_mode == "pm" else 1.0
         self.p_ref = 0.0; self.p_meas = 0.0; self.fault = ""; self.ready = False; self.reached = False
         self.running = False; self.t_en_low = 0.0; self.t_sat = 0.0; self.sat = False
         self.fault_log = []
@@ -284,6 +285,9 @@ class Controller:
         if not en:
             self.running = False; self.reached = False; self.p_ref = 0.0; self.p_meas = 0.0
             self.f = sp.f_max * 0.75
+            if sp.ctl_mode == "pm":
+                self.m = sp.m_min      # v0.33：停机复位调制比——旧版保持上次值/初值 1.0，
+                                       # 每次启动全相移猛冲（首件 49.6 kW vs 设定 12 kW）
             self.ready = Vbus >= sp.V_ready
             self.mode = "ready" if self.ready else "wait"
             return None

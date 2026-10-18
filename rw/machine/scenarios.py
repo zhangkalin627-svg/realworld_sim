@@ -12,7 +12,8 @@ from .plc_prog import MACHINE_IL, without_water_interlock, no_wait_for_coil
 from . import stress as ST
 
 P_PART = 12e3          # 部分功率工况：输出 12 kW（工件约 10.4 kW）
-HEAT_PART = "K17"      # 对应加热时间 1.7 s（能量与 v0.8 的 5.94 kW×3 s 相当）
+HEAT_PART = "K16"      # v0.33：480Vac 母线(676V)下调制比下限 0.30 使最低输出 ~13 kW>12 kW 设定，
+                             # K17 能量超表 +9.4%；K16(1.6 s) 能量 18.31 kJ 与 v0.8 表 5.944kW×3s=17.83 kJ 差 +2.7%（原 K17 意图不变）
 
 SCENARIOS = {
     "normal": dict(name="正常：上电 → 连续加工 5 件（部分功率 12 kW）", desc="冷却水 → 预充电 → 旁路 → 变频器就绪 → 循环加工。100 kW 电源带 12 kW 工件。", n_parts=5),
