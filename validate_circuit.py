@@ -111,6 +111,12 @@ def run():
     chk("5 有源网表不误报", not c6.warnings and not c6.run(".tran 1u 1m").warnings)
     c7 = KI.import_spice(None, "ic only\nR1 a 0 1k\nC1 a 0 1u IC=5\n.end\n")
     chk("5 只有初始条件（IC=）不算无激励", not c7.warnings)
+    # ---- 5b) 行为源 value={} 表达式在导入后原样保留（接地卡 Gea 毁损案例回归）
+    c8 = KI.import_spice(None, "behav\nVref ref 0 1.21\nGea 0 ctrl value={200u*(V(ref))}\nRz ctrl 0 1k\nB1 out 0 V={V(ctrl)*2}\nR1 out 0 1k\n.tran 1u 1m\n.end\n")
+    n8 = c8.netlist(".tran 1u 1m")
+    chk("5b 行为源 value={} 表达式不被节点清洗毁损", "value={200u*(V(ref))}" in n8 and "V={V(ctrl)*2}" in n8)
+    w8 = c8.run(".tran 1u 1m")
+    chk("5b 行为源仿真数值正确", abs(float(w8["v(out)"][-1]) - 0.484) < 0.01, "%.4f" % float(w8["v(out)"][-1]))
 
     # ---- 6) Waveforms 大小写
     x = np.linspace(0, 1e-3, 101)
