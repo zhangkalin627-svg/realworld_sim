@@ -5,6 +5,7 @@
 W=${1:-w$$}; R=$(cd "$(dirname "$0")/../.." && pwd); B=$R/tools/batch
 mkdir -p $B/run/$W $B/done $B/out
 cd $R
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1   # 多个 worker 并行时每个只用 1 线程，避免 BLAS 线程互相抢核
 while true; do
   for j in $B/jobs/*.job; do
     [ -e "$j" ] || continue
