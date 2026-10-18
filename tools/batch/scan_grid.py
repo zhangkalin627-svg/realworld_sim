@@ -4,7 +4,8 @@ import csv, os, sys, itertools, time, warnings
 warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from rw.scan import run_one
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "scan_grid.csv")
+SH, NSH = (int(sys.argv[1]), int(sys.argv[2])) if len(sys.argv) > 2 else (0, 1)   # 分片：第 SH 片 / 共 NSH 片，各片写各自 CSV
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "scan_grid_%d_of_%d.csv" % (SH, NSH))
 WALLS = [2.0, 3.0, 4.0, 6.0, 8.0]; FREQS = [5, 10, 20, 30, 50, 100, 200]
 THEATS = [0.7, 1.5, 2.6, 4.0]; MEDIA = ["water_spray", "polymer_spray", "oil_dip"]; POWERS = [6.0, 15.0]
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
@@ -17,7 +18,8 @@ new = not os.path.exists(OUT)
 with open(OUT, "a", newline="") as f:
     w = csv.DictWriter(f, cols)
     if new: w.writeheader()
-    for wall, fr, th, med, pw in itertools.product(WALLS, FREQS, THEATS, MEDIA, POWERS):
+    for idx, (wall, fr, th, med, pw) in enumerate(itertools.product(WALLS, FREQS, THEATS, MEDIA, POWERS)):
+        if idx % NSH != SH: continue
         key = (str(wall), str(fr), str(th), med, str(pw))
         if key in done: continue
         t0 = time.time(); row = dict(wall=wall, freq=fr, t_heat=th, medium=med, power=pw, err="")
