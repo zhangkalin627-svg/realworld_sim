@@ -1,0 +1,5 @@
+# 软件基准：每个 validate 脚本计时 3 次取中位，写 out/benchmark.tsv（秒）。用于看性能退化和并行化收益。
+cd ~/realworld_sim; mkdir -p tools/batch/out
+for f in validate_circuit.py validate_circuit_v012.py validate_energy.py validate_pll.py validate_power_baseline.py validate_flow.py validate_power_longrun.py validate_fw_pll.py validate_scenec_inductance.py; do
+  for i in 1 2 3; do s=$(date +%s.%N); timeout 900 ~/venv/bin/python $f >/dev/null 2>&1; echo $(echo "$(date +%s.%N)-$s"|bc); done | sort -n | sed -n 2p | xargs -I{} echo -e "$(date +%FT%T)\t$f\tmedian_secs={}" >> tools/batch/out/benchmark.tsv
+done

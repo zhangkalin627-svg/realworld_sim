@@ -1,0 +1,6 @@
+# 确定性复核：全量 validate 跑 3 遍，比较输出文本哈希，不同的列出来（仿真结果应可复现）。
+cd ~/realworld_sim; mkdir -p tools/batch/out; rm -rf /tmp/det; mkdir /tmp/det
+for i in 1 2 3; do for f in validate_circuit.py validate_circuit_v012.py validate_energy.py validate_pll.py validate_power_baseline.py validate_flow.py validate_scenec_inductance.py; do
+  timeout 900 ~/venv/bin/python $f 2>&1 | sed -E 's/[0-9]+\.[0-9]+s//g' | md5sum | cut -c1-8 > /tmp/det/$f.$i; done; done
+for f in validate_circuit.py validate_circuit_v012.py validate_energy.py validate_pll.py validate_power_baseline.py validate_flow.py validate_scenec_inductance.py; do
+  echo -e "$f\t$(cat /tmp/det/$f.1 /tmp/det/$f.2 /tmp/det/$f.3 | sort -u | wc -l) 种输出哈希（1=可复现）" >> tools/batch/out/determinism.tsv; done

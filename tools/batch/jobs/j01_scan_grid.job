@@ -1,0 +1,2 @@
+# 冶金扫描大网格（仿真结果）：壁厚×频率×加热时间×介质×功率，结果追加 CSV，已算过的点跳过（断点续跑）。
+cd ~/realworld_sim && ~/venv/bin/python tools/batch/scan_grid.py
