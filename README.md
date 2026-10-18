@@ -40,7 +40,7 @@ License: MIT（见 LICENSE）。
 ```
 电路仿真需要 ngspice：`install_ubuntu.sh` 里已包含 `sudo apt install ngspice`。
 可选的 Cortex-M 核心需要 unicorn：`./install_ubuntu.sh --with-unicorn`（或 `.venv/bin/pip install unicorn`），不装也能用其它全部功能。
-可选的非圆截面涡流需要 gmsh：`pip install gmsh`，不装也能用其它全部功能。
+可选的非圆截面涡流需要 gmsh：`pip install gmsh`（最小化系统还需 `sudo apt install libglu1-mesa`，否则 import 失败），不装也能用其它全部功能。
 
 ## Web 版（云端化，v0.16 起）
 普通 Linux 云主机即可跑（无需桌面环境）：

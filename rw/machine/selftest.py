@@ -104,18 +104,34 @@ def run():
     assert pred - 0.02 < S2["t_hf_off"] < pred + 0.06
     # (f) 联锁被短接后线圈热平衡
     m4, S4 = SC.run("water_loss_bypassed")
-    print("   联锁短接后线圈 %.0f°C（t=%.1f s 起损坏）；最后 1 件峰值温度 %.0f°C（线圈变热 → 铜损占比↑ → 同一输出功率下进工件的少）" % (
-        m4.coil_max, m4.coil_damage_t or -1, m4.done[-1]["T_peak"]))
-    assert m4.coil_damage_t is not None and m4.done[-1]["T_peak"] < m4.done[0]["T_peak"]
+    print("   联锁短接后 12 kW 工况：线圈 %.0f°C（最高，未达 %.0f°C 失效阈值）；首末件峰值温度 %.0f→%.0f°C" % (
+        m4.coil_max, sp.coil_fail, m4.done[0]["T_peak"], m4.done[-1]["T_peak"]))
+    # 2026-10-18 更正：旧断言（线圈损坏+末件变冷）的物理基础是控制器 m=1.0 启动猛冲 bug（每件启动 ~50 kW
+    # 冲击给线圈额外供热，178 s 即"损坏"）。修复 m 复位后，12 kW 低占空工况下线圈靠自然风冷（2 W/K）
+    # 即稳定在失效阈值以下（200 件/3600 s 复跑最高 84°C）——12 kW 缺水不失效是物理真相。
+    # 水流量联锁的保护价值在满功率段（满功率断水探针：秒级到失效，见 fp 探针记录）。
+    assert m4.coil_damage_t is None and m4.coil_max < sp.coil_fail
+    assert abs(m4.done[-1]["T_peak"] - m4.done[0]["T_peak"]) < 5.0
     # (g) 预充电不足的冲击电流判定
     m5, S5 = SC.run("precharge_short")
-    print("[整机] 预充电只等 0.1 s：冲击电流 %.0f A（正常预充电 %.1f A）" % (S5["inrush_A"], S["inrush_A"]))
-    assert S5["inrush_A"] > 50 * max(S["inrush_A"], 1e-3) and S5["inrush_A"] > 10 * sp.I_dc_rated
+    # 理论峰：K2 闭合瞬间 Vsrc—(Rs,L)—C 的 RLC 冲击，无阻尼上界 dV·sqrt(C/L)。
+    # （2026-10-18：旧断言的 10×I_dc_rated 阈值是按 m=1.0 猛冲 bug 时期调的——猛冲在 K2 闭合前把母线
+    #  电压拉低，虚增 dV 与冲击电流。修复后冲击回到 RLC 理论值，改用理论界作判据。）
+    bound = S5["inrush_dV"] * math.sqrt(sp.C_bus / sp.L_line)
+    zeta = sp.Rs / 2 * math.sqrt(sp.C_bus / sp.L_line)
+    wd = math.sqrt(max(1 - zeta * zeta, 1e-9))
+    i_theory = bound * math.exp(-zeta / wd * math.atan(wd / zeta)) if zeta < 1 else bound * 0.368
+    print("[整机] 预充电只等 0.1 s：冲击电流 %.0f A（正常预充电 %.1f A；RLC 理论 %.0f A，ζ=%.2f）" % (S5["inrush_A"], S["inrush_A"], i_theory, zeta))
+    assert S5["inrush_A"] > 50 * max(S["inrush_A"], 1e-3) and abs(S5["inrush_A"] / i_theory - 1) < 0.10
     # (h) 电网跌落：40% → 欠压跳闸；15% → 调频补偿
     m6, S6 = SC.run("mains_sag"); m7, S7 = SC.run("mains_sag_mild")
-    print("[整机] 电网跌落 40%%：变频器 %s；跌落 15%%：%d 件全合格，进线电流 %.1f → %.1f A（理论 ×%.2f）" % (
-        "欠压跳闸" if m6.ctl.fault_log and m6.ctl.fault_log[0][1] == "UV" else "未跳", S7["ok"], S7["I_src_pre"], S7["I_src_post"], 1 / 0.85))
-    assert m6.ctl.fault_log and m6.ctl.fault_log[0][1] == "UV" and S7["ng"] == 0
+    vb_min = min(v for tv, v in zip(m6.log["t"], m6.log["Vbus"]) if tv > 5)
+    print("[整机] 电网跌落 40%%：变频器 %s（母线最低 %.0f V vs 欠压线 %.0f V）；跌落 15%%：%d 件全合格，进线电流 %.1f → %.1f A（理论 ×%.2f）" % (
+        "欠压跳闸" if m6.ctl.fault_log and m6.ctl.fault_log[0][1] == "UV" else "未跳", vb_min, sp.V_uv, S7["ok"], S7["I_src_pre"], S7["I_src_post"], 1 / 0.85))
+    # 2026-10-18 更正：12 kW 低占空下 40%% 跌落的"欠压跳闸"旧预期同样是 m=1.0 猛冲 bug 伪影——猛冲
+    # 40+ kW 把母线瞬时拉穿。修复后 12 kW 从 388 V 母线取 ~31 A（前端按 100 kW 设计），物理上可穿越
+    # （Vbus 388 > V_uv 330；补偿电流 ×1.7 仍在限值内）。欠压跳闸的保护意义在满功率段（fp_sag40）。
+    assert not (m6.ctl.fault_log and m6.ctl.fault_log[0][1] == "UV") and vb_min > sp.V_uv and S7["ng"] == 0
     # (i) 长时间运行：有/无换热器
     m8, S8 = SC.run("longrun_no_hex"); m9, S9 = SC.run("longrun_hex")
     print("[整机] 8 小时后水箱：无换热器 %.1f°C（喷淋等效淬火 %.2f→%.2f s），有换热器 %.1f°C（稳态 %.1f°C）" % (
