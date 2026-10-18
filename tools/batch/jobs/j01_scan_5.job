@@ -1,0 +1,2 @@
+# 冶金扫描网格第 5/6 片（仿真结果，断点续跑）
+cd ~/realworld_sim && ~/venv/bin/python tools/batch/scan_grid.py 5 6
