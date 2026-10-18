@@ -53,3 +53,26 @@
 4. Scope 与 Simulation Data Inspector 交互（光标/测量/多 run 对比操作路径+截图）；
 5. R2026b 新界面特征（深色主题、面板布局）截图，供 U1 设计稿参考；
 6. PLECS 许可到位后同套（库结构/求解器选项/热域/扫描配置）。
+
+---
+
+## 增补 v1.1（2026-10-18 11:47）：MATLAB R2026b 实机核对 · 第一批（家机桥截图 5 张）
+
+已装产品（家机实测）：MATLAB / Simulink / Simscape / Simscape Electrical，版本 26.2（=R2026b）。库树中出现的其他产品名（HDL Coder、Stateflow 等）是浏览器条目，不等于已装。
+截图存档：私有备份盘 matlab-plecs-对标实机核对_2026-10-18/（5 张；不进公开仓库，对方界面素材只核对不复制）。
+
+**Solver 配置面板（变步长页，实机）**：
+- 类型：变步长/定步长；求解器默认"自动(自动求解器选择)"。
+- 变步长求解器全列表：自动、离散(无连续状态)、ode45 (Dormand-Prince)、ode23 (Bogacki-Shampine)、ode113 (Adams)、ode15s (stiff/NDF)、ode23s (stiff/Mod. Rosenbrock)、ode23t (mod. stiff/Trapezoidal)、ode23tb (stiff/TR-BDF2)、odeN (Nonadaptive)、daessc (DAE solver for Simscape)。
+- 详细参数：最大/最小/初始步长(auto)、相对容差 1e-3、绝对容差(auto)、自动缩放绝对容差、形状保持(全部禁用)、连续最小步数 1。
+- 过零选项：过零控制(使用局部设置)、算法(非自适应)、时间容差 10*128*eps、信号阈值(auto)、连续过零点数 1000。→ 对应本清单 F1（开关事件定位）的配置面设计参考：事件定位精度/算法/防抖（连续过零点数）三参数是成熟做法。
+- 高级参数：仿真时间 0 处的日期时间、启用解耦的连续积分、尽量降低过零点对积分的影响。
+
+**库结构（实机）**：
+- Simulink 库：Commonly Used Blocks、Continuous、Dashboard、DateTime、Discontinuities、Discrete、Logic and Bit Operations、Lookup Tables、Math Operations、Matrix Operations、Messages & Events、Model Verification、Model-Wide Utilities、Ports & Subsystems、Signal Attributes、Signal Routing、Sinks、Sources、String、User-Defined Functions；另有 Additional Math & Discrete、Fixed-Point Designer(+HDL Support)、HDL Coder、Simscape、Simulink 3D Animation、Simulink Coder、Simulink Extras、Stateflow、最近使用。
+- Simscape Electrical 树：Foundation Library、Utilities、Electrical（Connectors & References、Control、DQ0 Components、Electromechanical、Integrated Circuits、Passive、Semiconductors & Converters〔Converters、Sensors & Transducers、Sources、Switches & Breakers、Utilities〕、Additional Components、Network Couplers）。注意：本视图未见经典 Specialized Power Systems(SPS) 子库入口，26.2 可能已并入或需另开；待下一批核实。
+- 对我方 F3/F8 的启示：库按"功能域→子域→器件"三级组织，器件对话框是主要参数入口；realworld_sim 器件卡片库（F3）+ 参数 schema 自动生成面板（F8）路线一致，可对标其分组命名。
+
+**对差距清单的修订**：F2（求解器配置页）补充设计目标——提供"自动/刚性/非刚"三档+事件定位三参数（精度/算法/防抖），默认值对标：相对容差 1e-3 量级、连续事件防抖计数。
+
+待下一批核对：定步长求解器列表、Scope 与 Simulation Data Inspector 交互、电力电子 demo 模型结构、SPS 是否在 26.2 保留、PLECS（许可到位后）。
