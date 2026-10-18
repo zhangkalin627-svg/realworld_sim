@@ -76,3 +76,26 @@
 **对差距清单的修订**：F2（求解器配置页）补充设计目标——提供"自动/刚性/非刚"三档+事件定位三参数（精度/算法/防抖），默认值对标：相对容差 1e-3 量级、连续事件防抖计数。
 
 待下一批核对：定步长求解器列表、Scope 与 Simulation Data Inspector 交互、电力电子 demo 模型结构、SPS 是否在 26.2 保留、PLECS（许可到位后）。
+
+---
+
+## 增补 v1.2（2026-10-18 11:50）：MATLAB R2026b 实机核对 · 第二批 + 产品清单 + SPS 结论修正
+
+**产品清单（ver 实测）**：MATLAB 26.2.0.3386108 (R2026b) + Simulink/Simscape/Simscape Electrical 全 26.2，许可证 DEMO，Windows 11 专业版 26300。桌面为深色主题（R2026b 原生深色，工具带+面板dock 布局）→ U1 方向（深色高档）与行业最新版一致。家机下载目录另有 plecs-standalone-5-0-6 安装包（PLECS 5.0.6，等许可）。
+
+**SPS 结论修正（重要）**：Specialized Power Systems library 在 R2026a 已**移除**（官方正文，家机桥核）：https://www.mathworks.com/help/simscape-electrical/ug/upgrade-sps-models-to-use-simscape-blocks.html ，迁移走 spsConversionAssistant/手工替换。本清单 v1 与增补 v1.1 中"Simscape Electrical(Specialized Power Systems)"表述作废——26.2 只有 Simscape Electrical 新库；电力电子建模全面转向 Simscape 物理网络（半导体+变换器子库）。这对我们反而是好消息：对方砍掉了旧体系，新体系学习成本上升，realworld_sim 的垂直专用路线少了历史包袱。
+
+**定步长求解器全列表（实机）**：自动、离散(无连续状态)、ode8 (Dormand-Prince)、ode5、ode4 (Runge-Kutta)、ode3 (Bogacki-Shampine)、ode2 (Heun)、ode1 (Euler)、ode14x (外插)、ode1be (Backward Euler)。
+
+**Scope 双光标（实机）**：测量页签，光标 1/2 竖线+沿线圆点，读数框 ΔT/ΔY（如 ΔT: 5, ΔY: 337.8316e-03），底部状态栏显示采样基准。→ 我们波形页光标读数（Δt/1/Δt）方向一致，差 ΔY 读数可补。
+
+**Simulation Data Inspector 两 run 比较（实机，F7 的直接对标）**：
+- 结构：基线 run 下拉 vs 比较项 run 下拉；结果列（匹配/不匹配 + 最大差值）；上图两 run 叠加（基线蓝/比较橙），下图**差值曲线+容差带**（红=差，绿=容差）。
+- 容差字段：绝对容差/相对容差/时间容差，按信号分别设置；匹配统计（N 匹配/N 不匹配/N 未比较）；属性面板含单位、数据类型、采样时间、对齐方式、模型/模块/端口路径。
+- → F7 升级项：对比页加①差值子图+容差带（默认相对容差 1e-3 与求解器口径一致）②"匹配/不匹配"判定徽章③按信号设容差。这是 SDI 的核心交互，感应加热场景我们可做得更垂直（容差模板：槽流 ±2%、f0 ±0.5%）。
+
+**BuckConverter_sd（自带转换组件库，非完整 demo）**：
+- mask 参数对话框：Forward voltage 0.8 / On-state resistance 0.001 / Off-state conductance 1e-5（开关与二极管两组）/ Snubber 枚举(ee.enum.converters.snubber.exclude)。→ 理想开关四参数（Vf/Ron/Goff/缓冲）与 PLECS 同思路，证实 F1 分段线性理想开关的参数面设计：Vf、Ron、Goff、Snubber 枚举。
+- 内部结构：行为级——门信号 g × (BL≤0.5 判定) → 理想开关（G 门控，1+/1− 电气端口），输出 2+/2−。行为级 buck 用乘法+理想开关实现，非器件级物理。
+
+待核对（末批）：正式电力电子 demo（家机桥在找）、PLECS 5.0.6 许可到位后同套（库结构/求解器/热域/扫描）。
