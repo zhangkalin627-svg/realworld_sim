@@ -240,9 +240,9 @@ class CircuitPage(QtWidgets.QWidget):
             self.pick.addItem("示例：" + n, ("ex", k))
         for p in sorted(glob.glob(os.path.join(PUBLIC_NET_DIR, "*.cir")) + glob.glob(os.path.join(PUBLIC_NET_DIR, "*.net"))):
             self.pick.addItem("KiCad 网表：" + os.path.basename(p), ("file", p))
-        for p in sorted(glob.glob(os.path.join(PRIVATE_DIR, "*"))):
-            if os.path.splitext(p)[1].lower() in (".cir", ".net", ".sp", ".spice"):
-                self.pick.addItem("私有板：" + os.path.basename(p), ("file", p))
+        for p in sorted(glob.glob(os.path.join(PRIVATE_DIR, "**", "*"), recursive=True)):
+            if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (".cir", ".net", ".sp", ".spice"):
+                self.pick.addItem("私有板：" + os.path.relpath(p, PRIVATE_DIR), ("file", p))
         self.pick.blockSignals(False)
 
     def open_file(self):
@@ -278,9 +278,30 @@ class CircuitPage(QtWidgets.QWidget):
     def show_netlist(self):
         if not self.circuit:
             return
-        d = QtWidgets.QDialog(self); d.setWindowTitle("网表"); d.resize(700, 500)
-        t = QtWidgets.QPlainTextEdit(self.circuit.netlist(self.ana.text())); t.setReadOnly(True)
-        QtWidgets.QVBoxLayout(d).addWidget(t); d.exec()
+        d = QtWidgets.QDialog(self); d.setWindowTitle("网表（可编辑——改完点「保存并重跑」看波形变化）"); d.resize(720, 540)
+        t = QtWidgets.QPlainTextEdit(self.circuit.netlist(self.ana.text()))
+        lay = QtWidgets.QVBoxLayout(d); lay.addWidget(t)
+        row = QtWidgets.QHBoxLayout()
+        tip = QtWidgets.QLabel("改动只影响本次仿真，不写回原文件。"); tip.setStyleSheet("color:#666")
+        row.addWidget(tip); row.addStretch(1)
+        br = QtWidgets.QPushButton("保存并重跑"); br.setDefault(True)
+        bc = QtWidgets.QPushButton("关闭")
+        row.addWidget(br); row.addWidget(bc); lay.addLayout(row)
+        bc.clicked.connect(d.reject)
+
+        def rerun():
+            try:
+                c = KI.import_spice(getattr(self.circuit, "source_file", None) or ".", t.toPlainText())
+            except Exception as ex:
+                QtWidgets.QMessageBox.warning(d, "网表导入失败", str(ex)[:2000]); return
+            self.example, self.circuit = None, c
+            self.ana.setText(KI.default_analysis(c, self.ana.text().strip() or ".tran 1u 10m"))
+            w = getattr(c, "warnings", [])
+            self.theory.setText(f"编辑后重导入：{len(c.elements)} 个元件，{len(c.nodes())} 个网络。"
+                                + ("<br><span style='color:#b26a00'>" + "<br>".join(w[:6]) + "</span>" if w else ""))
+            d.accept(); self.simulate()
+        br.clicked.connect(rerun)
+        d.exec()
 
     # ------------------------------------------------ 仿真
     def simulate(self):
