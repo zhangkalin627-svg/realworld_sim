@@ -6,6 +6,9 @@ rms_stats.py —— 仿真波形统计量计算
 
 import numpy as np
 
+# NumPy 2.0 起 np.trapz 改名 np.trapezoid，这里两个都兼容
+_trapz = getattr(np, "trapezoid", None) or np.trapz
+
 
 def rms(x, t=None):
     """
@@ -28,7 +31,7 @@ def rms(x, t=None):
             raise ValueError("t 不能包含 NaN")
         if np.any(np.diff(t) <= 0):
             raise ValueError("t 必须严格递增")
-        integral = np.trapz(x ** 2, t)
+        integral = _trapz(x ** 2, t)
         period = t[-1] - t[0]
         return float(np.sqrt(integral / period))
     else:
@@ -56,7 +59,7 @@ def avg(x, t=None):
             raise ValueError("t 不能包含 NaN")
         if np.any(np.diff(t) <= 0):
             raise ValueError("t 必须严格递增")
-        integral = np.trapz(x, t)
+        integral = _trapz(x, t)
         period = t[-1] - t[0]
         return float(integral / period)
     else:
