@@ -180,6 +180,10 @@ def loaded_active_coil(N, length, d_coil_id, d_workpiece, rho_w, mu_r_w, f):
     """Loaded active-coil estimate: A_m = gap annulus + mu_r_w-weighted workpiece skin annulus
     (skin depth from penetration_depth). Long-coil model, no ends/leads; magnetic workpieces
     (mu_r_w >> 1) make the inside area significant. Returns dict; simulation estimate only."""
+    if d_workpiece >= d_coil_id:
+        raise ValueError("workpiece must be smaller than the coil bore")
+    if mu_r_w <= 0 or rho_w <= 0 or f <= 0:
+        raise ValueError("rho_w, mu_r_w and f must be positive")
     a_gap = active_area_gap(d_coil_id, d_workpiece)
     delta = penetration_depth(rho_w, f, mu_r_w)
     a_wp = active_area_workpiece(d_workpiece, delta)
