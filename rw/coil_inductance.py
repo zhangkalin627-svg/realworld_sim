@@ -153,3 +153,41 @@ def rect_section_ring(N, radius, radial, axial, nr=10, nz=20):
     gmd = 0.2235 * (dr + dz)
     M[np.diag_indices(n)] = MU0 * R * (np.log(8 * R / gmd) - 2)
     return w * w * M.sum()
+
+# ---- active-coil estimate (industry training-formula style) ----
+def penetration_depth(rho, f, mu_r=1.0):
+    """Current penetration (skin) depth [m]: sqrt(2 rho / (w MU0 mu_r)). rho [ohm m], f [Hz]."""
+    w = 2 * math.pi * f
+    return math.sqrt(2 * rho / (w * MU0 * mu_r))
+
+def active_area_gap(d_coil_id, d_workpiece):
+    """Annular cross-section between coil bore and workpiece [m^2]."""
+    return math.pi / 4 * (d_coil_id ** 2 - d_workpiece ** 2)
+
+def active_area_workpiece(d_workpiece, delta):
+    """Skin annulus inside the workpiece where the field exists [m^2]; capped at the full section."""
+    r = d_workpiece / 2
+    d_eff = min(delta, r)
+    return math.pi * (r ** 2 - (r - d_eff) ** 2)
+
+def active_coil_inductance(N, length, area_m, mu_r=1.0):
+    """L = MU0 mu_r N^2 A_m / l_coil (henries). Long-coil approximation with magnetic area A_m:
+    no end-effect correction, so it reads high for short or few-turn coils (compare solenoid_nagaoka
+    and coil_filament before using)."""
+    return MU0 * mu_r * N ** 2 * area_m / length
+
+def loaded_active_coil(N, length, d_coil_id, d_workpiece, rho_w, mu_r_w, f):
+    """Loaded active-coil estimate: A_m = gap annulus + mu_r_w-weighted workpiece skin annulus
+    (skin depth from penetration_depth). Long-coil model, no ends/leads; magnetic workpieces
+    (mu_r_w >> 1) make the inside area significant. Returns dict; simulation estimate only."""
+    a_gap = active_area_gap(d_coil_id, d_workpiece)
+    delta = penetration_depth(rho_w, f, mu_r_w)
+    a_wp = active_area_workpiece(d_workpiece, delta)
+    L_gap = active_coil_inductance(N, length, a_gap)
+    L_wp = active_coil_inductance(N, length, a_wp, mu_r_w)
+    return {"unit": "nH", "L_total": (L_gap + L_wp) * NH, "L_gap": L_gap * NH,
+            "L_workpiece": L_wp * NH, "A_gap_mm2": a_gap * 1e6, "A_wp_mm2": a_wp * 1e6,
+            "skin_depth_mm": delta * 1e3,
+            "warnings": ["long-coil approximation: no end effects; high for short/few-turn coils",
+                         "linear mu_r assumed; saturated magnetic workpieces read lower in practice",
+                         "leads/busbar/terminals not included"]}
