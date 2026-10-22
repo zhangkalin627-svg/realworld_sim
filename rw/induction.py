@@ -264,6 +264,9 @@ class InductionQuenchSim:
         self.em_tol = 0.048
         # v0.28 符号组装热步：None=未构建, False=不可用(回退通用 asm), dict=就绪
         self._sym = None
+        # 分解复用（v0.28 下一段）：None=未启用；启用后常驻本实例，不进 checkpoint
+        #（SuperLU 对象不可 JSON 序列化；断点续算后首步自动重分解，与 _sym 一致）
+        self._fr = None
         if nonlinear or conc is not None:
             self.em_every = max(em_every, 0.1)   # 温度变化慢，非线性迭代贵
         if accel:
@@ -557,6 +560,7 @@ class InductionQuenchSim:
             dt = dt or self.dt
             A = C / dt + K
             b = C @ T / dt + Q
+            Hs = {}
             for key, frac in (("o", 1.0), ("i", self.inner_quench)):
                 Ts = S.interp_fb(key, T)
                 h_air = M.quench_h("air", Ts)
@@ -566,9 +570,16 @@ class InductionQuenchSim:
                     Tinf = M.QUENCHANTS[self.medium]["T_bath"] * frac + 25.0 * (1 - frac)
                 else:
                     h, Tinf = h_air, 25.0
-                A = A + S.kernel_H(key, h, tm["H" + key])
+                H = S.kernel_H(key, h, tm["H" + key])
+                Hs[key] = H
+                A = A + H
                 b = b + S.kernel_hlin(key, h, Tinf)
-            return spla.spsolve(A.tocsc(), b)
+            # 分解复用（v0.28 下一段）：符号分解一次构建，数值分解仅矩阵值变化时重做；
+            # 任何自校验失败自动回退逐点分解（见 rw/factor_reuse.py），绝不静默继续。
+            if self._fr is None:
+                from . import factor_reuse as _frmod
+                self._fr = _frmod.FactorReuseCache()
+            return self._fr.solve(A, b, {"K": K, "C": C, "Ho": Hs["o"], "Hi": Hs["i"]}, dt)
         tb = self.tb
         Tq = tb.interpolate(T)
         k = M.steel_k(Tq.value)
