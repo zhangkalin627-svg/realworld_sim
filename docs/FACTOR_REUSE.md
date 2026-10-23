@@ -214,3 +214,88 @@
 - 全套件回归：本地只跑了 validate_factor_opt / validate_symasm /
   validate_ckpt 三项冒烟（见上），其余 validate*.py 由交付包 run_all.sh
   在云端全量执行。
+
+## 8. 第二轮优化（分支 thermal-factor-reuse-opt2，基线 4d56326）
+
+### 8.1 云端终判与本轮命题
+
+v2（4d56326）云端验收：确定性项全对上（偏差 5.713e-12 °C 级、计数器
+全对、回归全绿），但同机同例提速仅 **3.1%**（baseline 均值 0.9222 s
+vs reuse 0.8933 s），未达 30% 线、不合 main。云端机制读数：少 70 次
+分解只省约 0.04 s（t_refactor=0.057 s），276 次复用带出 1764 次细化、
+t_reuse_solve=0.325 s——float128 setup/求值单价吃掉收益还倒贴。
+本轮按 §7.4 预告的两方向执行，只动细化内部：门限判据、残差验收线
+（tol_res=1e-17 / tol_accept=1e-15）、spsolve 回退机制一律不动。
+
+### 8.2 _refine 开销剖析（本地实测归属，标准短用例 300 步）
+
+矩阵规模 n=1560、nnz=10388。原版 _refine 分段计时（替换实现内部计时，
+277 次调用）：setup 0.66 ms/次、迭代段 3.77 ms/次、平均 6.37 轮/次
+（约 0.59 ms/轮）。单项微基准：A.astype(float128) 0.255 ms、
+|A8| 稀疏行和（nA8）1.09 ms（独立循环测法；在位分段与其余 setup 合计
+0.66 ms，取在位口径）、float128 SpMV 0.063 ms、float64 SpMV 0.017 ms、
+lu.solve 0.167 ms（微基准；在位更高）。残差轨迹实测：rn0 中位数
+5.8e-05，每轮改善约 2–3 个量级，约 5 轮穿过 tol_accept，约 2 轮耗在
+accept 线以下的抛光段。结论：成本主体是 1764 轮 float128 残差求值与
+向量运算（lu.solve 本身两精度相同、不可省）；setup 次之。
+
+### 8.3 改法
+
+- **方向① 混合精度两段式**（_refine_f64_phase + _refine_f128）：
+  第一段全程 float64 残差/修正推进，停机条件 = 残差进入警戒带
+  （10×tol_accept = 1e-14，写死；带外 float64 残差相对误差 ≤~1e-2，
+  修正方向与 float128 一致）、连续 2 轮改善 <2×（float64 舍入下限
+  停滞）、预算耗尽或残差非有限。第二段 float128 按原口径裁决：
+  验收 rn 仍为 float128 度量、tol_res/tol_accept 不动。两段共享
+  max_refine 总预算（max_refine=0 时两段均不修正、只做 float128
+  度量，与初版语义一致）。
+- **nA8 换 reduceat 行段求和**（_nA_inf）：按 CSR indptr 行段对 |data|
+  做 np.add.reduceat，与稀疏 sum(axis=1) 同为按 data 顺序逐行累加；
+  标准用例全程 300 步、float64/float128 两精度下与原式逐位比对
+  **0 不一致**（验证脚本一次性校验，非常驻断言）。此项与 §7 记录的
+  两项改值省算（float64 行和、锚点缓存）不同类：不改变数值、只改求值
+  路径。微基准 0.079 ms vs 稀疏行和 0.239 ms（同矩阵独立循环测法）。
+- **方向② 停滞判据**（float128 段）：无改善（新残差 ≥ 历史最优）
+  立即停；已达 tol_accept 且连续 2 轮（写死）改善 <2× 时提前停，
+  不再为追 tol_res 空烧慢尾；tol_res 仍是第一停机线。相对初版的
+  行为差：初版在 accept 线之上遇单轮慢改善即停，本版继续推进至
+  预算/停滞为止——只会减少（不会增加）refine-residual 回退。
+- 新增计数器：n_f64_prescreen / n_f128_verify / n_refine_f64_iter /
+  n_refine_f128_iter（info() 可查），n_refine_iter 保持总量口径。
+
+### 8.4 本地验证（标准短用例；计时均为本机负载下读数，只作定性）
+
+- validate_factor_opt.py：**PASS**。A) 偏差：vs 通用组装+逐点分解
+  5.443e-12 °C、vs v0.28 基线 4.803e-12 °C（线 <2e-11，与 v2 的
+  5.571/4.462e-12 同级）；C) tol_A=0：300 重分解、0 复用、逐位
+  0.000e+00；D) 强制回退（n_fallback=1、warn、回退解与 spsolve 逐位
+  一致）+ 下一步重锚（n_reanchor=1）；NaN 注入 degraded='non-finite'。
+- 计数对比（同用例）：n_refactor 23、n_reuse 276、n_fallback 1、
+  n_reanchor 1、degraded=null 与 v2 全同；细化总轮数 1764 → 1785
+  （+1.2%，两段切换的少量额外轮次），其中 float128 轮 1764 → **417
+  （−76%）**、float64 轮 1368。本轮回退原因为 refine-residual-5.66e-08
+  （v2 为 -1.32e-05）：同属 §7.3 已知的约 1/300 步局部收缩失效，
+  被验收拦截、spsolve 精确回退、下一步重锚自愈，不静默。
+- 计时（本地交替 A/B，各 2 次，t_reuse_solve）：新版 1.163 / 1.139 s，
+  旧版 1.350 / 2.098 s（旧版第二样本遇负载尖峰）。两组交替均新版
+  更低，定性约 −15%（取第一组比值；本机方差 ±30%，不作定量结论）。
+  分段（新版）：float64 段 0.51–0.59 s（1368 轮，约 0.40 ms/轮）、
+  float128 段 0.47–0.53 s（277 次 setup + 417 轮）。
+- validate_symasm.py：通过（终态 max|ΔT|=5.44e-12 °C，ΔHRC=0，
+  Δt85=0）。validate_ckpt.py：通过（恢复 vs 连续终态差 0.0006 °C，
+  与 v2 一致）。validate_em.py：本地仍无法跑完——环境缺 libGLU.so.1
+  （运行期 OSError），与 v2 本地同错、属既有环境问题非本次回归；
+  已列入交付包 run_all.sh 云端全量。
+
+### 8.5 未验项与下一步（如实标注）
+
+- ≥30% 提速的最终判定仍归云端同机同例。按云端 v2 读数折算（本地
+  −15% 只作定性参考）：t_reuse_solve 0.325 s 若同比例下降，总时
+  约 0.845 s、提速约 8%——**预计仍未过 30% 线**，不预支乐观结论。
+  剩余瓶颈：每复用步的修正 lu.solve 本身（1785 轮两精度同价）与
+  float128 裁决 setup；在此二者不动的前提下，复用步成本下限约
+  为逐点分解的 1/3 量级，单靠细化内部优化难以达线。后续候选
+  （不在本轮范围）：门限侧按预测细化轮数分流（高轮数步直接重分解）、
+  或 tol_A 与 max_age 的再标定，均需另行立项并重新过确定性验收。
+- 全套件回归：本地冒烟 = validate_factor_opt / validate_symasm /
+  validate_ckpt；其余由交付包 run_all.sh 在云端全量执行。

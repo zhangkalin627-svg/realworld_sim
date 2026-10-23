@@ -49,6 +49,20 @@
    重新锚定（回退步本身的处理与初版完全一致：spsolve + warn + 计数；
    重新锚定避免对已证伪的锚点反复空烧细化迭代——v2 门放宽后初版赖以恢复
    的"块门自然触发"不再必然成立，故显式化）。
+6. opt2（分支 thermal-factor-reuse-opt2，基于 4d56326）：云端验收确定性
+   全过但提速仅 3.1%——1764 次细化迭代的 float128 setup/求值单价吃掉了
+   少分解 70 次的收益。本轮只动细化内部（门限、验收线 tol_res/tol_accept、
+   spsolve 回退机制一律不动）：
+   方向① 混合精度两段式：残差远高于验收线时先用 float64 残差/修正快速
+   推进（每轮成本约 float128 轮的 1/3），进入警戒带（10×tol_accept）或
+   float64 停滞后交 float128 段按初版口径裁决（验收 rn 仍为 float128
+   度量）；float128 段的归一化常数 nA8 改用 CSR 行段 reduceat 求和
+   （与稀疏 sum(axis=1) 按 data 顺序逐行累加、逐位一致，交付验证已比对）。
+   方向② 停滞判据：float128 段内无改善立即停；已达 tol_accept 且连续
+   两轮改善 <2× 时提前停，不再为追 tol_res 空烧慢尾（tol_res 仍是第一
+   停机线）；两段共享 max_refine 总预算（与初版语义一致）。新增计数器
+   n_f64_prescreen / n_f128_verify / n_refine_f64_iter / n_refine_f128_iter
+   供审计两段的实际分工。
 
 环境开关：
 - RW_NO_SYM=1：沿用旧行为（通用组装 + 逐点分解），复用管理器不启用。
@@ -103,6 +117,10 @@ class FactorReuseCache:
         self.n_reuse = 0
         self.n_refactor = 0
         self.n_refine_iter = 0
+        self.n_f64_prescreen = 0   # opt2：进入 float64 预筛段的复用求解次数
+        self.n_f128_verify = 0     # opt2：进入 float128 裁决段的复用求解次数
+        self.n_refine_f64_iter = 0   # opt2：float64 段细化轮数
+        self.n_refine_f128_iter = 0  # opt2：float128 段细化轮数
         self.n_fallback = 0
         self.n_reanchor = 0
         self.fallback_reasons = []
@@ -172,6 +190,10 @@ class FactorReuseCache:
         """审计快照：计数器、回退记录、降级状态、计时。"""
         return dict(n_solve=self.n_solve, n_reuse=self.n_reuse,
                     n_refactor=self.n_refactor, n_refine_iter=self.n_refine_iter,
+                    n_f64_prescreen=self.n_f64_prescreen,
+                    n_f128_verify=self.n_f128_verify,
+                    n_refine_f64_iter=self.n_refine_f64_iter,
+                    n_refine_f128_iter=self.n_refine_f128_iter,
                     n_fallback=self.n_fallback, n_reanchor=self.n_reanchor,
                     fallback_reasons=list(self.fallback_reasons),
                     degraded=self.degraded, tol_reuse=self.tol_reuse,
@@ -194,21 +216,110 @@ class FactorReuseCache:
         denom = nA * float(np.abs(x).max(initial=0.0)) + float(np.abs(b).max(initial=0.0))
         return float(np.linalg.norm(r, np.inf) / max(denom, 1e-300))
 
+    # opt2 方向①警戒带倍数（写死，不许事后调）：float64 预筛只在残差高于
+    # _GUARD_ACCEPT × tol_accept 时推进。依据：float64 残差的计算噪声下限
+    # 为 eps64 量级（归一化后 ~1e-16），警戒带取 10×tol_accept = 1e-14：
+    # 带外时 float64 残差相对误差 ≤ ~1e-2，修正方向与 float128 残差一致；
+    # 带内一律交 float128 段精确裁决，验收线与度量口径不动。
+    _GUARD_ACCEPT = 10.0
+    # opt2 方向②停滞判据（写死，不许事后调）：连续 _STALL_ROUNDS 轮改善
+    # 因子 < _STALL_FACTOR（新残差 ≥ 历史最优 / _STALL_FACTOR）视为停滞。
+    _STALL_FACTOR = 2.0
+    _STALL_ROUNDS = 2
+
+    @staticmethod
+    def _nA_inf(A):
+        """||A||_inf = 各行 |data| 段和的最大值（A 须为 CSR）。
+
+        按 CSR 的 indptr 行段对 |data| 做 reduceat 求和：与
+        np.abs(A).sum(axis=1).max() 同为按 data 顺序逐行累加，
+        float128 下逐位一致（opt2 交付验证在标准用例全程矩阵上比对相等），
+        但免去稀疏 sum(axis=1) 的矩阵构造开销。空行（段长 0）行和为 0。
+        """
+        ad = np.abs(A.data)
+        if ad.size == 0:
+            return 0.0
+        idx = np.minimum(A.indptr[:-1], ad.size - 1)
+        rs = np.add.reduceat(ad, idx)
+        empty = np.diff(A.indptr) == 0
+        if np.any(empty):
+            rs = np.where(empty, ad.dtype.type(0), rs)
+        return float(rs.max())
+
     def _refine(self, A, b, x):
-        """混合精度迭代细化：残差用 float128（eps~1e-19）计算，修正步仍用
-        float64 的 SuperLU 分解。返回 (x_float64, rn_final)。
-        细化至残差停滞（触及舍入下限）或达 tol_res；若停滞在 tol_accept 之上，
-        调用方视为自校验失败。"""
+        """混合精度迭代细化（opt2 两段式；初版为全程 float128 残差）。
+
+        第一段 float64 预筛（方向①）：残差远高于验收线时用 float64
+        残差/修正快速推进（每轮约 float128 轮成本的 1/3）；进入警戒带、
+        float64 停滞或预算耗尽后交第二段。
+        第二段 float128 裁决（方向②）：口径与初版一致——残差用 float128
+        计算、修正步用 float64 SuperLU 分解、验收 rn 为 float128 度量、
+        tol_res/tol_accept 不动；仅停滞判据收紧慢尾、nA8 换逐位一致的
+        reduceat 求和（见 _nA_inf）。
+        两段共享 max_refine 总预算（与初版"最多 max_refine 次修正"语义
+        一致；max_refine=0 时两段均不修正、只做 float128 度量）。
+        返回 (x_float64, rn_final)。"""
         if not self._have_f128:
             return self._refine_f64(A, b, x)
+        self.n_f64_prescreen += 1
+        x, used = self._refine_f64_phase(A, b, x, self.max_refine)
+        self.n_f128_verify += 1
+        return self._refine_f128(A, b, x, self.max_refine - used)
+
+    def _refine_f64_phase(self, A, b, x, budget):
+        """方向①预筛段：全程 float64。返回 (x, used_iters)。
+
+        推进条件：归一化残差（float64 度量）高于警戒带
+        _GUARD_ACCEPT × tol_accept。停机：进入警戒带、连续
+        _STALL_ROUNDS 轮改善 <_STALL_FACTOR（float64 舍入下限停滞）、
+        预算耗尽、残差非有限（交 float128 段按原口径处置）。"""
+        Ac = A.tocsr()
+        nA = self._nA_inf(Ac)
+        nb = float(np.abs(b).max(initial=0.0))
+        guard = self._GUARD_ACCEPT * self.tol_accept
+
+        def rn64(x):
+            r = b - Ac.dot(x)
+            denom = nA * float(np.abs(x).max(initial=0.0)) + nb
+            return float(np.linalg.norm(r, np.inf) / max(denom, 1e-300)), r
+
+        rn, r = rn64(x)
+        best = rn
+        slow = 0
+        used = 0
+        while used < budget and np.isfinite(rn) and rn > guard:
+            x = x + self.lu.solve(r)
+            used += 1
+            self.n_refine_iter += 1
+            self.n_refine_f64_iter += 1
+            rn_new, r = rn64(x)
+            if not np.isfinite(rn_new):
+                break
+            if rn_new >= best / self._STALL_FACTOR:
+                slow += 1
+            else:
+                slow = 0
+            if rn_new < best:
+                best = rn_new
+            rn = rn_new
+            if slow >= self._STALL_ROUNDS:
+                break
+        return x, used
+
+    def _refine_f128(self, A, b, x, budget):
+        """方向②裁决段：float128 残差 + float64 SuperLU 修正（初版口径）。
+
+        与初版 _refine 的差异只有两处：nA8 改用 _nA_inf（逐位一致）；
+        停滞判据——无改善（新残差 ≥ 历史最优）立即停，已达 tol_accept
+        且连续 _STALL_ROUNDS 轮改善 <_STALL_FACTOR 时提前停（不为追
+        tol_res 空烧慢尾）；tol_res 仍是第一停机线，验收语义不变。"""
         f128 = np.float128
-        A8 = A.astype(f128)
+        A8 = A.tocsr().astype(f128)
         b8 = b.astype(f128)
         x8 = x.astype(f128)
-        # 归一化常数 ||A||_inf 逐步按当前 A 在 float128 下计算（与初版逐字一致；
-        # 曾试 float64 行和与锚点缓存两种省算，终态偏差均放大至 ~3e-11 °C，
-        # 机理未完全定案前不省这一项——见 docs/FACTOR_REUSE.md §7）。
-        nA8 = float(np.abs(A8).sum(axis=1).max())
+        # 归一化常数 ||A||_inf 按当前 A 在 float128 下计算（口径同初版；
+        # §7 记录的 float64 行和/锚点缓存两种改值省算均已否决，不再试）。
+        nA8 = self._nA_inf(A8)
         nb8 = float(np.abs(b8).max(initial=0.0))
 
         def rn8(x8):
@@ -218,19 +329,29 @@ class FactorReuseCache:
 
         rn, r8 = rn8(x8)
         best = rn
+        slow = 0
         it = 0
-        while it < self.max_refine:
+        while it < budget:
             if rn <= self.tol_res:
                 break
             dx = self.lu.solve(np.asarray(r8, dtype=np.float64))
             x8 = x8 + dx.astype(f128)
             self.n_refine_iter += 1
+            self.n_refine_f128_iter += 1
             it += 1
-            rn, r8 = rn8(x8)
-            if rn >= best * 0.5:  # 停滞：残差不再有效下降（已触及舍入下限）
+            rn_new, r8 = rn8(x8)
+            if rn_new >= best:  # 无改善：已触及舍入下限
+                rn = rn_new
                 break
-            if rn < best:
-                best = rn
+            if rn_new >= best / self._STALL_FACTOR:
+                slow += 1
+            else:
+                slow = 0
+            if rn_new < best:
+                best = rn_new
+            rn = rn_new
+            if rn <= self.tol_accept and slow >= self._STALL_ROUNDS:
+                break  # 方向②：已达验收线且慢尾，提前停
         return np.asarray(x8, dtype=np.float64), rn
 
     def _refine_f64(self, A, b, x):
