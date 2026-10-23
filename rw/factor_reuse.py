@@ -11,15 +11,29 @@
    pattern 一致（自校验之一），即"符号一次"的语义。注：scipy 未暴露符号/
    数值分离接口，数值重做时 SuperLU 内部会附带重做一次符号分析——这是接口
    限制，非设计冗余，如实标注。
-2. "数值分解仅在矩阵值变化时重做"：每步按"块"（K 传导 / C 热容 / Ho 外对流 /
-   Hi 内对流）比较材料性质驱动的矩阵值相对变化；任一块变化超过 tol_reuse
-   或 dt 变化 ⇒ 数值重分解；否则复用旧分解。
+2. "数值分解仅在矩阵值变化时重做"：门限判据（v2，thermal-factor-reuse-opt
+   优化迭代；初版为逐块自身尺度 0.02 门，见 docs/FACTOR_REUSE.md §7 的根因
+   实测）——每步计算总矩阵相对锚点（上次分解的 A）的 Frobenius 尺度变化
+   δ = ||A.data − A_fac.data||₂ / ||A_fac.data||₂（pattern 恒定、data 逐元
+   对齐，此差为精确 ΔA）；δ ≤ tol_A（默认 0.02）且 dt 不变且无块发生
+   自身尺度 >tol_block_loose（默认 1.0，工况切换级跳变）的变化 ⇒ 复用旧
+   分解；另设锚点年龄上限 max_age（默认 16 步）：慢变相位（如空冷段）δ
+   长期不达门限时仍强制周期重锚——实测无年龄上限时空冷段锚点老化使终态
+   轨迹偏差漂移至 ~3e-11 °C，加 max_age=16 后回落到 5.6e-12 °C（与初版
+   5.7e-12 同级，见 §7）。理由：复用的正确性由细化残差验收（见 5）守住，
+   门限只是性能启发式；初版逐块自身尺度门把量级远小于 A 主导项（C/dt）的
+   边界块 Ho/Hi 的相对变化误判为"矩阵已变"——实测触发重分解的步上
+   |ΔHo|max/|A|max 中位数仅 5.8e-5、总 A 范数相对变化中位数 0.0014，
+   旧分解作预条件子的细化收缩比 ρ≈3.4δ（δ=0.02 时 ρ≈0.06），复用完全
+   可行。逐块 0.02 信息仍记录于 last_changed_blocks 供审计。
 3. "非线性 Picard 迭代内矩阵结构不变时复用分解"：管理器以 solve(A, b) 为通用
    接口，天然支持迭代作用域内的复用。当前 _thermal_step 无内层 Picard 迭代
    （物性按旧温显式线性化，一步一解），该作用域在结构上已支持、尚未启用；
    EM 的 mur 不动点迭代是后续候选，未在本单范围（见 docs/FACTOR_REUSE.md）。
-4. "相邻热步材料性质未变的块复用"：块级变化门——K/C/Ho/Hi 逐块比对相对变化，
-   全块未变（≤ tol_reuse）才复用；并记录是哪一块触发了重分解（可审计）。
+4. "相邻热步材料性质未变的块复用"：v2 门以总矩阵 δ 为准（理由见 2）；逐块
+   比对保留两项职责——自身尺度 >tol_block_loose 的块作为工况切换级跳变的
+   后备触发（如淬火介质切换时 Ho 跳变），以及 last_changed_blocks 审计记录
+   （>tol_reuse 的块名）。触发重分解的原因（delta-A / 块名 / dt）可审计。
 5. "任何自校验失败自动回退逐点分解，不得静默继续"：自校验 =
    {pattern 一致， 全有限， splu 成功， 复用解残差达标}。
    任一失败 ⇒ 本步改用久经验证的 spsolve（逐点分解）求解，并大声记录
@@ -30,7 +44,11 @@
    （eps~1e-19）计算、修正步用 float64 的 SuperLU 分解，把解的精度下限从
    cond*eps64 压到 cond*eps128；细化至残差停滞（tol_res 默认 1e-17）；
    细化后残差仍高于 tol_accept（默认 1e-15）⇒ 视为自校验失败
-   （本步回退逐点分解并大声记录；下一步的块级门限比较会自然触发重分解恢复）。
+   （本步回退逐点分解并大声记录）。v2 恢复策略（加强而非削弱）：发生
+   refine-residual 回退后置 force_refactor 标志，下一步无条件重分解
+   重新锚定（回退步本身的处理与初版完全一致：spsolve + warn + 计数；
+   重新锚定避免对已证伪的锚点反复空烧细化迭代——v2 门放宽后初版赖以恢复
+   的"块门自然触发"不再必然成立，故显式化）。
 
 环境开关：
 - RW_NO_SYM=1：沿用旧行为（通用组装 + 逐点分解），复用管理器不启用。
@@ -52,8 +70,13 @@ from scipy.sparse.linalg import splu, spsolve
 class FactorReuseCache:
     """热步线性求解的分解复用管理器（每 sim 实例一个，随实例消亡，不进 checkpoint）。"""
 
-    def __init__(self, tol_reuse=0.02, tol_res=1e-17, tol_accept=1e-15, max_refine=15):
-        self.tol_reuse = float(tol_reuse)
+    def __init__(self, tol_reuse=0.02, tol_A=0.02, tol_block_loose=1.0, max_age=16,
+                 tol_res=1e-17, tol_accept=1e-15, max_refine=15):
+        self.tol_reuse = float(tol_reuse)  # v2 起仅作审计标注：块自身尺度变化 >此值记入 last_changed_blocks
+        self.tol_A = float(tol_A)          # v2 主门限：总矩阵 Frobenius 尺度相对变化 δ ≤ 此值才复用
+        self.tol_block_loose = float(tol_block_loose)  # v2 后备门限：任一块自身尺度变化 >此值（工况切换级）⇒ 重分解
+        self.max_age = int(max_age)       # v2 锚点年龄上限（步）：δ 达标也强制周期重锚，防慢变相位锚点无限老化
+        self.steps_since_fac = 0
         self.tol_res = float(tol_res)       # 细化停止目标（高精度残差下）
         self.tol_accept = float(tol_accept)  # 细化后验收线：仍不达标 = 自校验失败
         self.max_refine = int(max_refine)
@@ -70,7 +93,10 @@ class FactorReuseCache:
         self.lu = None
         self.pat = None            # (indptr.copy(), indices.copy()) at factorization
         self.comp_data = None      # {name: data.copy()} at factorization
+        self.A_data = None         # A.data.copy() at factorization（v2 主门限的锚点）
+        self.A_norm = None         # ||A_fac.data||_2 at factorization
         self.dt_fac = None
+        self.force_refactor = False  # v2：refine-residual 回退后置位，下一步无条件重分解重新锚定
         self.degraded = None       # reason str once degraded, else None
         # 计数器（审计用）
         self.n_solve = 0
@@ -78,8 +104,10 @@ class FactorReuseCache:
         self.n_refactor = 0
         self.n_refine_iter = 0
         self.n_fallback = 0
+        self.n_reanchor = 0
         self.fallback_reasons = []
         self.last_changed_blocks = []
+        self.last_delta_A = None
         # 轻量计时（审计用，单位 s）
         self.t_refactor = 0.0
         self.t_reuse_solve = 0.0
@@ -107,22 +135,35 @@ class FactorReuseCache:
             return self._degrade(A, b, "non-finite")
         if self.lu is None:
             return self._refactor(A, b, comps, dt, why="first")
-        # 变化门：块级比对 + dt
+        # 变化门（v2）：dt + 总矩阵 δ（主） + 块级跳变（后备）
         if dt != self.dt_fac:
             return self._refactor(A, b, comps, dt, why="dt-changed")
-        changed = [name for name, c in comps.items()
-                   if self._rel_change(c.data, self.comp_data[name]) > self.tol_reuse]
-        self.last_changed_blocks = changed
-        if changed:
-            return self._refactor(A, b, comps, dt, why="blocks-changed:" + ",".join(changed))
+        if self.force_refactor:
+            # 上一步 refine-residual 回退 ⇒ 本步无条件重分解重新锚定（见 docstring 5）
+            return self._refactor(A, b, comps, dt, why="post-fallback-reanchor")
+        self.steps_since_fac += 1
+        if self.steps_since_fac >= self.max_age:
+            return self._refactor(A, b, comps, dt, why="max-age")
+        blk_rel = {name: self._rel_change(c.data, self.comp_data[name])
+                   for name, c in comps.items()}
+        self.last_changed_blocks = [n for n, v in blk_rel.items() if v > self.tol_reuse]
+        loose = [n for n, v in blk_rel.items() if v > self.tol_block_loose]
+        if loose:
+            return self._refactor(A, b, comps, dt, why="blocks-jump:" + ",".join(loose))
+        # δ：总矩阵相对锚点的 Frobenius 尺度变化（pattern 已断言一致，data 逐元对齐）
+        delta = float(np.linalg.norm(A.data - self.A_data) / max(self.A_norm, 1e-300))
+        self.last_delta_A = delta
+        if delta > self.tol_A:
+            return self._refactor(A, b, comps, dt, why="delta-A:%.3g" % delta)
         # 复用分解求解 + 精度自校验（迭代细化至浮点噪声级）
         t0 = time.perf_counter()
         x = self.lu.solve(b)
         x, rn = self._refine(A, b, x)
         self.t_reuse_solve += time.perf_counter() - t0
         if rn > self.tol_accept:
-            # 细化后残差仍不达标 = 自校验失败：本步回退逐点分解并大声记录；
-            # 下一步块级门限会自然触发重分解恢复（不清缓存、不降级）。
+            # 细化后残差仍不达标 = 自校验失败：本步回退逐点分解并大声记录（与初版一致）；
+            # 并置 force_refactor，下一步重分解重新锚定（不清其余缓存、不降级）。
+            self.force_refactor = True
             return self._fallback_once(A, b, "refine-residual-%.2e" % rn)
         self.n_reuse += 1
         return x
@@ -131,9 +172,10 @@ class FactorReuseCache:
         """审计快照：计数器、回退记录、降级状态、计时。"""
         return dict(n_solve=self.n_solve, n_reuse=self.n_reuse,
                     n_refactor=self.n_refactor, n_refine_iter=self.n_refine_iter,
-                    n_fallback=self.n_fallback,
+                    n_fallback=self.n_fallback, n_reanchor=self.n_reanchor,
                     fallback_reasons=list(self.fallback_reasons),
                     degraded=self.degraded, tol_reuse=self.tol_reuse,
+                    tol_A=self.tol_A, last_delta_A=self.last_delta_A,
                     tol_res=self.tol_res, t_refactor=self.t_refactor,
                     t_reuse_solve=self.t_reuse_solve)
 
@@ -163,6 +205,9 @@ class FactorReuseCache:
         A8 = A.astype(f128)
         b8 = b.astype(f128)
         x8 = x.astype(f128)
+        # 归一化常数 ||A||_inf 逐步按当前 A 在 float128 下计算（与初版逐字一致；
+        # 曾试 float64 行和与锚点缓存两种省算，终态偏差均放大至 ~3e-11 °C，
+        # 机理未完全定案前不省这一项——见 docs/FACTOR_REUSE.md §7）。
         nA8 = float(np.abs(A8).sum(axis=1).max())
         nb8 = float(np.abs(b8).max(initial=0.0))
 
@@ -218,7 +263,13 @@ class FactorReuseCache:
         self.lu = lu
         self.pat = (A.indptr.copy(), A.indices.copy())
         self.comp_data = {k: v.data.copy() for k, v in comps.items()}
+        self.A_data = A.data.copy()
+        self.A_norm = float(np.linalg.norm(A.data))
         self.dt_fac = dt
+        if why == "post-fallback-reanchor":
+            self.n_reanchor += 1
+        self.force_refactor = False
+        self.steps_since_fac = 0
         self.n_refactor += 1
         x = lu.solve(b)
         # 自校验：新鲜分解的残差也应健康（float64 下 ~1e-16；>1e-13 说明矩阵本身病态）
